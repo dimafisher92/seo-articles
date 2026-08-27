@@ -1,6 +1,27 @@
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { config as loadEnv } from "dotenv";
 import { defineConfig } from "drizzle-kit";
 
 import { sanitizeConnectionString } from "./src/url.js";
+
+/**
+ * `pnpm run configure` writes `DATABASE_URL_UNPOOLED` into the worker's env
+ * file — the direct connection is wanted by migrations and by the worker, never
+ * by the app on Vercel — and `pnpm db:push` is the very next thing anyone runs.
+ * Without this it would not see it: drizzle-kit loads no env file of its own,
+ * so the command fails with `url: ''` while the value sits in a file the
+ * project itself created two commands earlier.
+ *
+ * The path is resolved from this file rather than the working directory,
+ * because `db:push` runs from the repo root and the config lives here.
+ *
+ * dotenv does not overwrite variables that are already set, so an explicit
+ * `DATABASE_URL_UNPOOLED=… pnpm db:push` still wins over the file.
+ */
+const here = dirname(fileURLToPath(import.meta.url));
+loadEnv({ path: join(here, "..", "..", "apps", "worker", ".env") });
 
 /**
  * Migrations must run over a **direct** connection, not the pooled one.

@@ -69,7 +69,8 @@ connection string on serverless providers.
 
 ```bash
 pnpm install
-DATABASE_URL_UNPOOLED="postgres://…" pnpm db:push
+pnpm run configure   # writes both env files, asks for both strings
+pnpm db:push         # reads DATABASE_URL_UNPOOLED from apps/worker/.env
 ```
 
 Migrations use the **direct** connection; the app and worker use the **pooled**

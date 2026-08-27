@@ -154,9 +154,13 @@ does not survive its own transaction). `pnpm run configure` asks for both.
 Create the tables:
 
 ```powershell
-$env:DATABASE_URL_UNPOOLED="<the string without -pooler>"
 pnpm db:push
 ```
+
+`pnpm run configure` already wrote the direct string into `apps\worker\.env`,
+and `db:push` reads it from there. Setting `$env:DATABASE_URL_UNPOOLED` first
+still works and takes priority — useful for pointing one run at a different
+database.
 
 You should see a list of `CREATE TABLE` statements ending in `[✓] Changes applied`.
 
