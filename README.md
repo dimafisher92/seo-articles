@@ -124,14 +124,35 @@ Without `SEARCHATLAS_API_KEY` the pipeline still runs — it clusters keywords a
 finds content gaps from live SERPs — but leaves the volume and difficulty
 columns blank and says so in the UI.
 
-> **Verify the endpoint paths before the first run.** The `X-API-Key` header and
-> the existence of the keyword endpoints are confirmed, but the exact paths were
-> not readable from the build environment. They are declared in one block at the
-> top of `apps/worker/src/providers/searchatlas.ts` and every one is overridable
-> via `SEARCHATLAS_PATH_*`, so a correction needs no code change. Check them
-> against <https://docs.searchatlas.com> once your key is in hand. Response
-> field names are read tolerantly, so a naming difference degrades to a null
-> rather than a crash.
+**Find the real endpoint paths before the first run:**
+
+```bash
+pnpm searchatlas:probe
+```
+
+The `X-API-Key` header and the base URL are confirmed, but the exact paths were
+not readable where this code was written — `docs.searchatlas.com` and
+`api.searchatlas.com` are both unreachable from there. The paths in
+`apps/worker/src/providers/searchatlas.ts` are therefore educated guesses, and
+every one is overridable via `SEARCHATLAS_PATH_*` precisely because they were
+expected to need correcting.
+
+The probe does the correcting from a machine that can reach the API. It reads
+the OpenAPI manifest if one is published — authoritative, no guessing — and
+otherwise tries candidate paths against all four capabilities. Either way it
+prints the exact env lines to paste into `apps/worker/.env`:
+
+```
+SEARCHATLAS_PATH_METRICS="/v2/keywords/overview"
+SEARCHATLAS_PATH_RANKED="/v2/domains/ranked-keywords"
+```
+
+Ranked keywords is the one to chase if only some resolve: without it there is no
+content gap analysis. Missing metrics costs the volume column but clustering
+still works.
+
+Response field names are read tolerantly, so a naming difference degrades to a
+null rather than a crash.
 
 ### Magnific — image generation
 
@@ -223,6 +244,7 @@ pnpm setup          # write both env files
 pnpm dev            # Next.js on :3000
 pnpm worker         # the worker
 pnpm magnific:probe # verify image generation against the live API
+pnpm searchatlas:probe # discover the keyword endpoints
 pnpm typecheck      # every package
 pnpm db:studio      # browse the database
 DATABASE_URL="postgres://…" pnpm smoke   # test suite

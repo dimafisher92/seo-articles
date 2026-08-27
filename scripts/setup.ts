@@ -203,9 +203,13 @@ async function main(): Promise<void> {
     console.log("    pnpm db:push        create the tables");
     console.log("    pnpm dev            the app, on http://localhost:3000");
     console.log("    pnpm worker         in a second terminal\n");
-    if (answers.magnificKey) {
-      console.log("    pnpm magnific:probe verify image generation works\n");
+    if (answers.searchAtlasKey) {
+      console.log("    pnpm searchatlas:probe  find the keyword endpoints");
     }
+    if (answers.magnificKey) {
+      console.log("    pnpm magnific:probe     verify image generation works");
+    }
+    if (answers.searchAtlasKey || answers.magnificKey) console.log("");
 
     const missing = [
       !answers.claudeToken &&

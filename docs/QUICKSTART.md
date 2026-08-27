@@ -269,7 +269,26 @@ reached the app, authenticated, and is ready.
 
 ---
 
-## 8. Magnific for images
+## 8. SearchAtlas keyword data
+
+Put your key in `apps\worker\.env` as `SEARCHATLAS_API_KEY`, then find the
+endpoint paths:
+
+```powershell
+pnpm searchatlas:probe
+```
+
+The adapter's paths are guesses — the SearchAtlas docs were unreachable where
+this code was written. The probe reads the API's own schema if it publishes one,
+otherwise tries candidates, and prints the env lines to paste back. Run it once;
+without it, keyword runs may come back empty.
+
+If only some endpoints resolve, ranked keywords is the one worth chasing —
+without it there is no content gap analysis.
+
+---
+
+## 9. Magnific for images
 
 Get an API key from the Magnific dashboard and put it in `apps\worker\.env` as
 `MAGNIFIC_API_KEY` (or answer the question in `pnpm setup`). Then verify it:
@@ -317,7 +336,7 @@ Vault — which is a perfectly reasonable way to work.
 
 ---
 
-## 9. Deploying to Vercel
+## 10. Deploying to Vercel
 
 Only worth doing once the local run works end to end.
 
