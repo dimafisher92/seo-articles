@@ -1,5 +1,7 @@
 import { defineConfig } from "drizzle-kit";
 
+import { sanitizeConnectionString } from "./src/url.js";
+
 /**
  * Migrations must run over a **direct** connection, not the pooled one.
  *
@@ -15,7 +17,15 @@ import { defineConfig } from "drizzle-kit";
  * functions open a connection per request and would exhaust the direct
  * endpoint's slots.
  */
-const url = process.env.DATABASE_URL_UNPOOLED ?? process.env.DATABASE_URL;
+const raw = process.env.DATABASE_URL_UNPOOLED ?? process.env.DATABASE_URL;
+
+/**
+ * Same sanitising as the runtime driver, and it matters more here: drizzle-kit
+ * also runs on postgres-js, and given Neon's `channel_binding=require` it does
+ * not report the rejected startup parameter — it simply hangs on "Pulling
+ * schema from database" forever.
+ */
+const url = raw ? sanitizeConnectionString(raw) : raw;
 
 if (url?.includes("-pooler")) {
   console.warn(

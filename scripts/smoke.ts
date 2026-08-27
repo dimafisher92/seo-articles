@@ -23,6 +23,7 @@ import {
   keywordRuns,
   keywords as keywordsTable,
   planItems,
+  sanitizeConnectionString,
 } from "@seo/db";
 import {
   buildJsonLd,
@@ -562,6 +563,47 @@ async function pureTests(): Promise<void> {
     });
     const types = blocks.map((b) => (b as { "@type": string })["@type"]);
     assert.deepEqual(types, ["BlogPosting"]);
+  });
+
+  console.log("\nConnection strings");
+
+  await test("Neon's channel_binding is stripped", () => {
+    // Verbatim from Neon's Connect dialog. postgres-js forwards what it does
+    // not recognise as a server startup parameter, and Postgres rejects this
+    // one; drizzle-kit does not even report it, it just hangs forever.
+    const neon =
+      "postgresql://neondb_owner:pw@ep-x-pooler.eu-central-1.aws.neon.tech" +
+      "/neondb?sslmode=require&channel_binding=require";
+    const cleaned = sanitizeConnectionString(neon);
+
+    assert.ok(!cleaned.includes("channel_binding"), "channel_binding survived");
+    assert.ok(cleaned.includes("sslmode=require"), "sslmode was dropped too");
+    assert.ok(cleaned.includes("ep-x-pooler"), "the host was mangled");
+    assert.ok(cleaned.includes("neondb_owner:pw@"), "credentials were mangled");
+  });
+
+  await test("real server settings are left alone", () => {
+    const url =
+      "postgres://u:p@host/db?application_name=seo&options=-c%20statement_timeout%3D5s";
+    assert.equal(sanitizeConnectionString(url), url);
+  });
+
+  await test("sslrootcert=system survives, a file path does not", () => {
+    assert.ok(
+      sanitizeConnectionString(
+        "postgres://u:p@host/db?sslrootcert=system",
+      ).includes("sslrootcert=system"),
+    );
+    assert.ok(
+      !sanitizeConnectionString(
+        "postgres://u:p@host/db?sslrootcert=/etc/ca.pem",
+      ).includes("sslrootcert"),
+    );
+  });
+
+  await test("an unparseable string is passed through, not swallowed", () => {
+    // Better the driver reports the real problem than this helper eats it.
+    assert.equal(sanitizeConnectionString("not a url"), "not a url");
   });
 }
 

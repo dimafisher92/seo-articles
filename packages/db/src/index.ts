@@ -2,9 +2,11 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
 import * as schema from "./schema.js";
+import { sanitizeConnectionString } from "./url.js";
 
 export * from "./schema.js";
 export { schema };
+export { sanitizeConnectionString } from "./url.js";
 
 /**
  * One driver everywhere.
@@ -28,7 +30,7 @@ export function createDb(url = process.env.DATABASE_URL): Database {
   // long-lived process and does not need more either.
   const max = Number(process.env.DATABASE_POOL_MAX ?? 5);
 
-  cachedClient = postgres(url, {
+  cachedClient = postgres(sanitizeConnectionString(url), {
     max,
     prepare: false,
     idle_timeout: 20,
