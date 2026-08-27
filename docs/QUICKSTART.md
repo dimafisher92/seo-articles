@@ -117,12 +117,34 @@ says "not recognized" or "no package.json", you are in the wrong directory —
 
 ## 3. Database
 
-Go to <https://neon.tech>, sign up, create a project. On the dashboard copy the
-**pooled** connection string — it has `-pooler` in the hostname and looks like:
+Go to <https://neon.tech> and sign up. On the "create your first project" screen:
+
+- **Project name** — anything; `seo-articles` is fine.
+- **Region** — leave the US East default. The latency that matters is between
+  the app and the database, not between your laptop and the database: page
+  loads are the sensitive part, and Vercel deploys functions to US East by
+  default. The worker only does batch work and will not notice.
+- **Services** — leave only **Postgres database** on. Object storage is not
+  needed (images go to Vercel Blob), and neither is Neon Auth (sign-in is
+  Auth.js).
+
+Create the project, then copy the **pooled** connection string — the one with
+`-pooler` in the hostname:
 
 ```
-postgresql://user:pass@ep-something-pooler.eu-central-1.aws.neon.tech/neondb?sslmode=require
+postgresql://neondb_owner:PASSWORD@ep-something-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require
 ```
+
+If the dialog shows a **Connection pooling** toggle, turn it on; otherwise find
+it under Dashboard → Connection Details. This is not cosmetic: the app is
+serverless, so every request opens a fresh connection, and without the pooler
+the database runs out of connection slots under any real load. The code is
+already written for a pooler (`prepare: false`), so a direct string works too —
+it just fails later, under load, which is the worse way to find out.
+
+The free tier's 0.5 GB is ample: only text and metadata live here, images are in
+Blob. The database also scales to zero when idle, so the first query after a
+pause takes a second or two — that is normal, not a fault.
 
 Create the tables:
 
