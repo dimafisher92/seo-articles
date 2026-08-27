@@ -1,0 +1,126 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 30 40% 99%;
+    --foreground: 24 20% 12%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 24 20% 12%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 24 20% 12%;
+
+    --primary: 24 94% 53%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 30 30% 96%;
+    --secondary-foreground: 24 20% 20%;
+
+    --muted: 30 20% 96%;
+    --muted-foreground: 25 8% 45%;
+
+    --accent: 28 60% 95%;
+    --accent-foreground: 24 60% 30%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 142 58% 38%;
+    --success-foreground: 0 0% 100%;
+
+    --border: 28 18% 90%;
+    --input: 28 18% 90%;
+    --ring: 24 94% 53%;
+
+    --radius: 0.65rem;
+  }
+
+  :root.dark {
+    --background: 24 14% 8%;
+    --foreground: 30 20% 94%;
+
+    --card: 24 12% 11%;
+    --card-foreground: 30 20% 94%;
+    --popover: 24 12% 11%;
+    --popover-foreground: 30 20% 94%;
+
+    --primary: 24 94% 55%;
+    --primary-foreground: 24 30% 8%;
+
+    --secondary: 24 10% 16%;
+    --secondary-foreground: 30 20% 90%;
+
+    --muted: 24 10% 16%;
+    --muted-foreground: 28 8% 62%;
+
+    --accent: 24 20% 18%;
+    --accent-foreground: 28 60% 80%;
+
+    --destructive: 0 62% 48%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 142 50% 45%;
+    --success-foreground: 0 0% 100%;
+
+    --border: 24 10% 20%;
+    --input: 24 10% 20%;
+    --ring: 24 94% 55%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+}
+
+@layer components {
+  /* Rendered article preview and the TipTap surface share this typography. */
+  .prose-article {
+    @apply max-w-none text-[15px] leading-7 text-foreground;
+  }
+  .prose-article h1 {
+    @apply mb-4 mt-0 text-3xl font-semibold tracking-tight;
+  }
+  .prose-article h2 {
+    @apply mb-3 mt-8 text-xl font-semibold tracking-tight;
+  }
+  .prose-article h3 {
+    @apply mb-2 mt-6 text-lg font-semibold;
+  }
+  .prose-article p {
+    @apply my-4;
+  }
+  .prose-article ul {
+    @apply my-4 list-disc space-y-1 pl-6;
+  }
+  .prose-article ol {
+    @apply my-4 list-decimal space-y-1 pl-6;
+  }
+  .prose-article a {
+    @apply text-primary underline underline-offset-2;
+  }
+  .prose-article table {
+    @apply my-6 w-full border-collapse text-sm;
+  }
+  .prose-article th {
+    @apply border border-border bg-muted px-3 py-2 text-left font-medium;
+  }
+  .prose-article td {
+    @apply border border-border px-3 py-2 align-top;
+  }
+  .prose-article img {
+    @apply my-6 w-full rounded-lg border border-border;
+  }
+  .prose-article blockquote {
+    @apply my-4 border-l-2 border-primary/40 pl-4 italic text-muted-foreground;
+  }
+  .prose-article code {
+    @apply rounded bg-muted px-1 py-0.5 text-[13px];
+  }
+}
