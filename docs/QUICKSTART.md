@@ -40,11 +40,17 @@ winget install Git.Git
 ```
 
 Close PowerShell and open a **new** window — installers only update `PATH` for
-new sessions. Then enable pnpm, which ships with Node:
+new sessions. Then install pnpm:
 
 ```powershell
-corepack enable pnpm
+npm install -g pnpm@10
 ```
+
+> The usual advice is `corepack enable pnpm`, but on Windows that writes a shim
+> into `C:\Program Files\nodejs\` and fails with `EPERM: operation not
+> permitted` unless PowerShell is running as Administrator. Installing through
+> npm puts it under your own profile instead, so no elevation is needed. The
+> `@10` pins the major version the lockfile was built with.
 
 Check all three:
 
@@ -296,7 +302,12 @@ machine and billing your Claude subscription.
 
 **`pnpm : The term 'pnpm' is not recognized`**
 Node is not installed, or you did not open a new terminal after installing it.
-Run `corepack enable pnpm` in a fresh window.
+Run `npm install -g pnpm@10` in a fresh window.
+
+**`corepack enable pnpm` fails with `EPERM: operation not permitted`**
+Corepack writes into `C:\Program Files\nodejs\`, which needs Administrator
+rights. Use `npm install -g pnpm@10` instead — it installs under your own
+profile and needs no elevation.
 
 **`no package.json here`**
 You are in the wrong folder. `cd $HOME\projects\seo-articles`.
