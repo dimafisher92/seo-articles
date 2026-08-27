@@ -140,6 +140,9 @@ importers:
       '@anthropic-ai/claude-agent-sdk':
         specifier: ^0.1.10
         version: 0.1.77(zod@3.25.76)
+      '@seo/db':
+        specifier: workspace:*
+        version: link:../../packages/db
       '@seo/playbook':
         specifier: workspace:*
         version: link:../../packages/seo
@@ -149,6 +152,9 @@ importers:
       dotenv:
         specifier: ^16.6.1
         version: 16.6.1
+      drizzle-orm:
+        specifier: ^0.44.5
+        version: 0.44.7(postgres@3.4.9)
       zod:
         specifier: ^3.25.76
         version: 3.25.76
@@ -187,6 +193,9 @@ importers:
 
   packages/shared:
     dependencies:
+      marked:
+        specifier: ^15.0.12
+        version: 15.0.12
       zod:
         specifier: ^3.25.76
         version: 3.25.76
