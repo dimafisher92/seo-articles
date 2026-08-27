@@ -440,8 +440,9 @@ you edited the right one, and that you restarted after editing.
 The worker is not running. Start it — the job will be picked up.
 
 **A job is stuck at `running` after a crash**
-On Vercel a cron requeues it after 10 minutes. Running locally there is no cron,
-so clear it by hand:
+Start the worker: the claim endpoint requeues jobs whose worker went silent for
+10 minutes, and it does that on the next poll. If the worker cannot be started,
+clear it by hand:
 
 ```sql
 update jobs set status = 'queued', claimed_by = null where status = 'running';

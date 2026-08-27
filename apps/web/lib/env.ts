@@ -33,9 +33,13 @@ export const env = {
   get notionClientsDbId(): string {
     return required("NOTION_CLIENTS_DATABASE_ID");
   },
-  /** Protects the Vercel cron endpoint. */
-  get cronSecret(): string {
-    return required("CRON_SECRET");
+  /**
+   * Protects `/api/cron/reap`. Optional: stale-job recovery runs on the claim
+   * endpoint, so that route is a manual convenience. Unset means nobody can
+   * call it, which is the right default for a secret that guards a mutation.
+   */
+  get cronSecret(): string | null {
+    return process.env.CRON_SECRET || null;
   },
   /**
    * Comma-separated email domains allowed to sign in. Empty means any Google

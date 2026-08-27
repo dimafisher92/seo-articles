@@ -87,8 +87,11 @@ Deploy `apps/web`. Set the environment variables from `.env.example` under the
 - **Google OAuth** — callback is `https://<your-app>/api/auth/callback/google`.
   Set `ALLOWED_EMAIL_DOMAINS` to your agency domain. With neither that nor
   `ALLOWED_EMAILS` set, sign-in is refused outright rather than left open.
-- **Cron** — `vercel.json` registers `/api/cron/reap` every 10 minutes. It
-  rescues jobs whose worker went away mid-run. Set `CRON_SECRET`.
+- **Stale-job recovery** — no cron needed. Jobs abandoned by a worker that died
+  mid-run are requeued by `/api/worker/claim`, which sweeps for them whenever a
+  worker asks for work. `/api/cron/reap` still exists to run the same sweep by
+  hand (or on a schedule, if you are on a plan that allows a useful one); set
+  `CRON_SECRET` if you want to call it.
 
 ### 3. Claude credentials for the worker
 
@@ -278,5 +281,8 @@ It needs a live Postgres and creates and removes its own rows.
 - **The worker is a single point of failure for generation.** Jobs are never
   lost, but they stop moving when the machine is off. If that becomes a problem,
   the same worker runs unchanged on a small VPS.
-- **A job whose worker vanishes** is requeued by the cron reaper after 10
-  minutes of silence, up to `maxAttempts`.
+- **A job whose worker vanishes** is requeued after 10 minutes of silence, up
+  to `maxAttempts`. The sweep runs on the claim endpoint, so the rescue happens
+  the moment a worker next asks for work rather than on a schedule — Vercel's
+  Hobby plan allows only one cron run per day, which would have meant waiting
+  up to twenty-four hours.

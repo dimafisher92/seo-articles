@@ -8,6 +8,20 @@ import { db } from "./db";
 /** How long a running job may go without a heartbeat before it is requeued. */
 export const STALE_JOB_MINUTES = 10;
 
+/**
+ * How often reaping is worth doing. Workers poll every few seconds, so the
+ * sweep is throttled rather than run on every claim; a job abandoned ten
+ * minutes ago is not more abandoned for waiting another thirty seconds.
+ */
+const REAP_INTERVAL_MS = 30_000;
+
+/**
+ * Serverless memory is per-instance and vanishes on a cold start, which is
+ * exactly the right failure mode here: the worst case is reaping more often
+ * than needed, never less.
+ */
+let lastReapAt = 0;
+
 export type EnqueueInput = {
   type: JobType;
   clientId: string | null;
@@ -174,6 +188,29 @@ export async function requeueStaleJobs(): Promise<{ requeued: number; failed: nu
   }
 
   return { requeued: toRequeue.length, failed: toFail.length };
+}
+
+/**
+ * Reaps, but at most once every {@link REAP_INTERVAL_MS}.
+ *
+ * Recovery used to hang off a Vercel cron, which the Hobby plan caps at one run
+ * per day — an abandoned job would sit unrescued for up to twenty-four hours,
+ * and a schedule any tighter fails the deployment outright. Hanging it off the
+ * claim endpoint instead removes both problems: the sweep runs whenever a
+ * worker asks for work, which is precisely when a rescued job can be handed
+ * straight back out.
+ */
+export async function maybeRequeueStaleJobs(): Promise<void> {
+  const now = Date.now();
+  if (now - lastReapAt < REAP_INTERVAL_MS) return;
+  lastReapAt = now;
+
+  try {
+    await requeueStaleJobs();
+  } catch {
+    // Reaping is maintenance. A worker asking for work must still get an
+    // answer, so a failure here is never allowed to fail the claim.
+  }
 }
 
 /** Most recent job of a type for a client — drives the per-tool status badges. */

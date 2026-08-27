@@ -45,6 +45,14 @@ import {
   MODELS,
   resolveModel,
 } from "../apps/worker/src/providers/magnific.js";
+// The shipping implementations, not copies: the claim query and the reaper are
+// the two places where a subtle change would pass typecheck and still lose or
+// duplicate work, so the test has to exercise the real ones.
+import {
+  claimNextJob,
+  requeueStaleJobs,
+  STALE_JOB_MINUTES,
+} from "../apps/web/lib/queue.js";
 import { renderEnvFiles } from "./setup.js";
 
 const db = getDb;
@@ -697,27 +705,6 @@ async function queueTests(clientId: string): Promise<void> {
 
   // Mirrors lib/queue.ts claimNextJob — this is the query concurrent workers
   // race on, so it is worth exercising against a real Postgres.
-  async function claim(workerId: string) {
-    const rows = await db().execute(sql`
-      update ${jobs}
-         set status = 'running',
-             attempts = ${jobs.attempts} + 1,
-             claimed_by = ${workerId},
-             claimed_at = now(),
-             heartbeat_at = now()
-       where ${jobs.id} = (
-               select ${jobs.id}
-                 from ${jobs}
-                where ${jobs.status} = 'queued'
-                order by ${jobs.createdAt}
-                limit 1
-                for update skip locked
-             )
-      returning ${jobs.id} as "id", ${jobs.type} as "type", ${jobs.attempts} as "attempts"
-    `);
-    return (rows as unknown as { id: string; type: string; attempts: number }[])[0] ?? null;
-  }
-
   await db().delete(jobs).where(eq(jobs.clientId, clientId));
 
   await test("claims the oldest queued job and marks it running", async () => {
@@ -737,7 +724,7 @@ async function queueTests(clientId: string): Promise<void> {
       .insert(jobs)
       .values({ type: "content_plan", clientId, payload: { order: 2 } });
 
-    const claimed = await claim("worker-a");
+    const claimed = await claimNextJob("worker-a");
     assert.ok(claimed, "nothing claimed");
     assert.equal(claimed.id, first.id);
     assert.equal(claimed.attempts, 1);
@@ -748,7 +735,7 @@ async function queueTests(clientId: string): Promise<void> {
   });
 
   await test("a second worker gets a different job, never the same one", async () => {
-    const claimed = await claim("worker-b");
+    const claimed = await claimNextJob("worker-b");
     assert.ok(claimed, "second claim returned nothing");
     assert.equal(claimed.type, "content_plan");
 
@@ -763,7 +750,7 @@ async function queueTests(clientId: string): Promise<void> {
   });
 
   await test("an empty queue returns nothing rather than blocking", async () => {
-    assert.equal(await claim("worker-c"), null);
+    assert.equal(await claimNextJob("worker-c"), null);
   });
 
   await test("concurrent claims hand out distinct jobs", async () => {
@@ -778,7 +765,7 @@ async function queueTests(clientId: string): Promise<void> {
     // The real reason for SKIP LOCKED: five workers grabbing at once must end
     // up with five different jobs, not one job handed out five times.
     const claims = await Promise.all(
-      Array.from({ length: 5 }, (_, i) => claim(`racer-${i}`)),
+      Array.from({ length: 5 }, (_, i) => claimNextJob(`racer-${i}`)),
     );
 
     const ids = claims.filter(Boolean).map((c) => c!.id);
@@ -788,6 +775,8 @@ async function queueTests(clientId: string): Promise<void> {
 
   await test("the reaper requeues a job whose worker went silent", async () => {
     await db().delete(jobs).where(eq(jobs.clientId, clientId));
+
+    const silent = new Date(Date.now() - (STALE_JOB_MINUTES + 20) * 60_000);
 
     const [stale] = await db()
       .insert(jobs)
@@ -799,8 +788,8 @@ async function queueTests(clientId: string): Promise<void> {
         attempts: 1,
         maxAttempts: 3,
         claimedBy: "ghost",
-        claimedAt: new Date(Date.now() - 30 * 60_000),
-        heartbeatAt: new Date(Date.now() - 30 * 60_000),
+        claimedAt: silent,
+        heartbeatAt: silent,
       })
       .returning();
     assert.ok(stale);
@@ -815,34 +804,54 @@ async function queueTests(clientId: string): Promise<void> {
         attempts: 3,
         maxAttempts: 3,
         claimedBy: "ghost",
-        claimedAt: new Date(Date.now() - 30 * 60_000),
-        heartbeatAt: new Date(Date.now() - 30 * 60_000),
+        claimedAt: silent,
+        heartbeatAt: silent,
       })
       .returning();
     assert.ok(exhausted);
 
-    const cutoff = sql`now() - interval '10 minutes'`;
-    const candidates = await db()
-      .select()
-      .from(jobs)
-      .where(
-        and(
-          eq(jobs.status, "running"),
-          sql`coalesce(${jobs.heartbeatAt}, ${jobs.claimedAt}) < ${cutoff}`,
-        ),
-      );
-    assert.equal(candidates.length, 2, "reaper did not see both stale jobs");
+    // Still beating, so it must survive the sweep untouched.
+    const [alive] = await db()
+      .insert(jobs)
+      .values({
+        type: "write_article",
+        clientId,
+        payload: {},
+        status: "running",
+        attempts: 1,
+        maxAttempts: 3,
+        claimedBy: "healthy",
+        claimedAt: silent,
+        heartbeatAt: new Date(),
+      })
+      .returning();
+    assert.ok(alive);
 
-    // A job with attempts left goes back on the queue; one that has exhausted
-    // them is terminal, so the UI stops spinning on it.
-    assert.equal(
-      candidates.filter((j) => j.attempts < j.maxAttempts).length,
-      1,
+    const result = await requeueStaleJobs();
+    assert.equal(result.requeued, 1, "wrong number requeued");
+    assert.equal(result.failed, 1, "wrong number failed");
+
+    const byId = new Map(
+      (await db().select().from(jobs).where(eq(jobs.clientId, clientId))).map(
+        (job) => [job.id, job],
+      ),
     );
-    assert.equal(
-      candidates.filter((j) => j.attempts >= j.maxAttempts).length,
-      1,
-    );
+
+    // Attempts left → back on the queue, and released so another worker can
+    // take it. Attempts exhausted → terminal, so the UI stops spinning on it.
+    assert.equal(byId.get(stale.id)?.status, "queued");
+    assert.equal(byId.get(stale.id)?.claimedBy, null);
+    assert.equal(byId.get(exhausted.id)?.status, "failed");
+    assert.ok(byId.get(exhausted.id)?.finishedAt, "failed job has no finish time");
+    assert.equal(byId.get(alive.id)?.status, "running", "reaped a live job");
+  });
+
+  await test("a requeued job is handed straight back out", async () => {
+    // The whole point of sweeping on the claim endpoint: recovery is only
+    // useful if the rescued job is immediately claimable again.
+    const claimed = await claimNextJob("worker-after-reap");
+    assert.ok(claimed, "the requeued job was not claimable");
+    assert.equal(claimed.attempts, 2, "attempts did not carry over");
   });
 
   await db().delete(clients).where(eq(clients.id, clientId));
