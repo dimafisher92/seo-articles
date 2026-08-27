@@ -40,7 +40,21 @@ winget install Git.Git
 ```
 
 Close PowerShell and open a **new** window — installers only update `PATH` for
-new sessions. Then install pnpm:
+new sessions.
+
+Windows blocks PowerShell scripts by default, which stops `npm` from running at
+all, so allow them for your own account first:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+```
+
+Answer `Y`. `RemoteSigned` lets scripts you wrote or installed locally run, and
+still requires a signature on anything downloaded from the internet. It applies
+to your user only, needs no elevation, and is the setting Microsoft documents
+for development machines.
+
+Now install pnpm:
 
 ```powershell
 npm install -g pnpm@10
@@ -303,6 +317,12 @@ machine and billing your Claude subscription.
 **`pnpm : The term 'pnpm' is not recognized`**
 Node is not installed, or you did not open a new terminal after installing it.
 Run `npm install -g pnpm@10` in a fresh window.
+
+**`npm : File ...\npm.ps1 cannot be loaded because running scripts is disabled`**
+PowerShell's execution policy is blocking it. Run
+`Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` and
+answer `Y`. To avoid changing the policy at all, call the batch shims instead —
+`npm.cmd`, `pnpm.cmd` — though you would then need `.cmd` on every such command.
 
 **`corepack enable pnpm` fails with `EPERM: operation not permitted`**
 Corepack writes into `C:\Program Files\nodejs\`, which needs Administrator
