@@ -20,3 +20,7 @@ pnpm-debug.log*
 .neon
 coverage/
 /tmp/
+
+# Written by `pnpm searchatlas:probe` — a few hundred tool definitions, useful
+# to read and send, not to commit.
+searchatlas-tools.json
