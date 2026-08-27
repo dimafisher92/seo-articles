@@ -22,6 +22,7 @@
  *
  *   pnpm searchatlas:probe
  *   pnpm searchatlas:probe --grep backlink
+ *   pnpm searchatlas:probe --show se_lookup_keyword,se_analyze_domain
  *   pnpm searchatlas:probe --call se_x --args '{"domain":"nike.com"}'
  */
 
@@ -107,6 +108,78 @@ function show(tool: McpTool, indent = "    "): void {
   if (tool.description) console.log(`${indent}  ${tool.description.slice(0, 150)}`);
 }
 
+type JsonSchema = {
+  type?: string | string[];
+  enum?: unknown[];
+  items?: JsonSchema;
+  description?: string;
+  default?: unknown;
+  properties?: Record<string, JsonSchema>;
+  required?: string[];
+  anyOf?: JsonSchema[];
+  oneOf?: JsonSchema[];
+};
+
+/** A parameter's type, compactly: `array<string>`, `string (a|b|c)`. */
+function typeOf(schema: JsonSchema | undefined): string {
+  if (!schema) return "?";
+
+  const union = schema.anyOf ?? schema.oneOf;
+  if (union) {
+    return [...new Set(union.map((member) => typeOf(member)))]
+      .filter((t) => t !== "null")
+      .join(" | ");
+  }
+
+  if (schema.enum) {
+    const values = schema.enum.map(String);
+    const shown = values.slice(0, 8).join("|");
+    return `${Array.isArray(schema.type) ? schema.type[0] : (schema.type ?? "string")} (${shown}${values.length > 8 ? `|+${values.length - 8}` : ""})`;
+  }
+
+  const base = Array.isArray(schema.type) ? schema.type.join("|") : schema.type;
+  if (base === "array") return `array<${typeOf(schema.items)}>`;
+  return base ?? "?";
+}
+
+/**
+ * Everything about one tool: full description and every parameter with its
+ * type, enum values and default.
+ *
+ * The listing above truncates hard, which is right for scanning 458 tools and
+ * useless for wiring one up — an enum whose values are cut off is exactly the
+ * detail that turns into a silent 400 later.
+ */
+function detail(tool: McpTool): void {
+  console.log(`\n\x1b[1m${tool.name}\x1b[0m`);
+  if (tool.description) {
+    for (const line of tool.description.split("\n")) console.log(`  ${line}`);
+  }
+
+  const schema = tool.inputSchema as JsonSchema | undefined;
+  const properties = schema?.properties ?? {};
+  const required = new Set(schema?.required ?? []);
+
+  const names = Object.keys(properties);
+  if (names.length === 0) {
+    console.log("  (no parameters)");
+    return;
+  }
+
+  const width = Math.max(...names.map((n) => n.length)) + 1;
+  console.log("");
+  for (const name of names) {
+    const property = properties[name]!;
+    const label = `${name}${required.has(name) ? "*" : ""}`.padEnd(width);
+    const fallback =
+      property.default !== undefined ? ` = ${JSON.stringify(property.default)}` : "";
+    console.log(`  ${label} ${typeOf(property)}${fallback}`);
+    if (property.description) {
+      console.log(`  ${" ".repeat(width)} ${property.description.slice(0, 220)}`);
+    }
+  }
+}
+
 async function main(): Promise<void> {
   console.log("\nSearchAtlas catalogue\n");
 
@@ -176,7 +249,30 @@ async function main(): Promise<void> {
     return;
   }
 
-  /* 3 — what the pipeline needs ------------------------------------------- */
+  /* 3 — full schemas for named tools -------------------------------------- */
+
+  const wanted = flag("show");
+  if (wanted) {
+    const names = wanted.split(",").map((n) => n.trim()).filter(Boolean);
+    console.log(`\n2. Full schemas\n`);
+    for (const name of names) {
+      const tool = tools.find((t) => t.name === name);
+      if (!tool) {
+        bad(`${name} — not in the catalogue`);
+        const near = tools
+          .filter((t) => t.name.includes(name.split("_")[1] ?? name))
+          .slice(0, 5)
+          .map((t) => t.name);
+        if (near.length > 0) info(`did you mean: ${near.join(", ")}`);
+        continue;
+      }
+      detail(tool);
+    }
+    console.log("");
+    return;
+  }
+
+  /* 4 — what the pipeline needs ------------------------------------------- */
 
   console.log("\n2. Candidates for what the pipeline needs\n");
   info("Names only — nothing gets wired up from a regex match.");
@@ -238,6 +334,7 @@ async function main(): Promise<void> {
 
   To look around yourself:
     pnpm searchatlas:probe --grep backlink
+    pnpm searchatlas:probe --show <name>,<name>
     pnpm searchatlas:probe --call <name> --args '{"domain":"nike.com"}'
   ────────────────────────────────────────────────────────────
 `);
