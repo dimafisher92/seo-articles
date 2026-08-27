@@ -3,22 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
-export type JobView = {
-  id: string;
-  type: string;
-  status: "queued" | "running" | "done" | "failed" | "canceled";
-  progress: {
-    step: number;
-    totalSteps: number;
-    label: string;
-    detail?: string;
-  } | null;
-  error: string | null;
-  result: Record<string, unknown> | null;
-  attempts: number;
-  createdAt: string;
-  finishedAt: string | null;
-};
+import type { JobView } from "./job-banner";
+
+export type { JobView };
 
 /**
  * Polls this client's jobs and refreshes the page when one finishes.

@@ -11,6 +11,7 @@ import { KeywordTable } from "@/components/keyword-table";
 import { PageHeader } from "@/components/page-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/misc";
+import { gapHint } from "@/lib/gap-hint";
 import { formatNumber, timeAgo } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -58,7 +59,7 @@ export default async function KeywordsPage({
           <Stat
             label="Content gaps"
             value={formatNumber(run.summary.gapKeywords)}
-            hint="Competitors rank, this client does not"
+            hint={gapHint(run.summary)}
           />
           <Stat
             label="Clusters"

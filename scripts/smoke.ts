@@ -49,6 +49,8 @@ import {
   resolveModel,
 } from "../apps/worker/src/providers/magnific.js";
 import { unwrapToolResult } from "../apps/worker/src/providers/mcp-http.js";
+import { gapHint } from "../apps/web/lib/gap-hint.js";
+import { jobsToShow, type JobView } from "../apps/web/lib/job-banner.js";
 import {
   JobTimeoutError,
   makeReporter,
@@ -574,6 +576,91 @@ async function pureTests(): Promise<void> {
     });
     const types = blocks.map((b) => (b as { "@type": string })["@type"]);
     assert.deepEqual(types, ["BlogPosting"]);
+  });
+
+  console.log("\nContent gap wording");
+
+  await test("zero gaps does not claim a fact about the market", () => {
+    // Each of these used to read "Competitors rank, this client does not".
+    assert.match(
+      gapHint({ gapKeywords: 0, competitorsRequested: [], competitorsAnalysed: [] }),
+      /No competitors set/,
+    );
+    assert.match(
+      gapHint({
+        gapKeywords: 0,
+        competitorsRequested: ["rival.com"],
+        competitorsAnalysed: [],
+      }),
+      /No ranking data for rival\.com yet/,
+    );
+    assert.match(
+      gapHint({
+        gapKeywords: 0,
+        competitorsRequested: ["rival.com"],
+        competitorsAnalysed: ["rival.com"],
+      }),
+      /Nothing found that these competitors rank for/,
+    );
+  });
+
+  await test("a real gap count keeps the plain reading", () => {
+    assert.equal(
+      gapHint({ gapKeywords: 12, competitorsAnalysed: ["rival.com"] }),
+      "Competitors rank, this client does not",
+    );
+  });
+
+  console.log("\nJob banner");
+
+  const job = (
+    type: string,
+    status: JobView["status"],
+    id: string,
+  ): JobView => ({
+    id,
+    type,
+    status,
+    progress: null,
+    error: status === "failed" ? "boom" : null,
+    result: null,
+    attempts: 1,
+    createdAt: "2026-08-27T00:00:00Z",
+    finishedAt: null,
+  });
+
+  await test("a failure superseded by a later success is not shown", () => {
+    // Newest first, as the API returns them. The old failure had been claiming
+    // the page was broken through every successful run after it.
+    const shown = jobsToShow([
+      job("keyword_research", "done", "new"),
+      job("keyword_research", "failed", "old"),
+    ]);
+    assert.deepEqual(shown, []);
+  });
+
+  await test("a failure that is still the latest of its type is shown", () => {
+    const shown = jobsToShow([
+      job("keyword_research", "failed", "latest"),
+      job("keyword_research", "done", "older"),
+    ]);
+    assert.deepEqual(shown.map((j) => j.id), ["latest"]);
+  });
+
+  await test("a failed type does not hide a different type still running", () => {
+    const shown = jobsToShow([
+      job("write_article", "running", "running-one"),
+      job("keyword_research", "failed", "failed-one"),
+    ]);
+    assert.deepEqual(shown.map((j) => j.id).sort(), ["failed-one", "running-one"]);
+  });
+
+  await test("a retry in flight replaces its own type's failure", () => {
+    const shown = jobsToShow([
+      job("keyword_research", "running", "retry"),
+      job("keyword_research", "failed", "first-try"),
+    ]);
+    assert.deepEqual(shown.map((j) => j.id), ["retry"]);
   });
 
   console.log("\nProgress and deadlines");

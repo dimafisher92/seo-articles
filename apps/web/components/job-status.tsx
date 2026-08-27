@@ -2,7 +2,7 @@
 
 import { AlertCircle, Clock, Loader2 } from "lucide-react";
 
-import type { JobView } from "@/lib/use-jobs";
+import { jobsToShow, type JobView } from "@/lib/job-banner";
 import { cn } from "@/lib/utils";
 
 const TYPE_LABEL: Record<string, string> = {
@@ -110,7 +110,7 @@ export function JobStatus({
   return null;
 }
 
-/** Stacks every job worth showing — active ones, plus the last failure. */
+/** Stacks every job worth showing. The rule itself lives in lib/job-banner. */
 export function JobStatusList({
   jobs,
   className,
@@ -118,12 +118,7 @@ export function JobStatusList({
   jobs: JobView[];
   className?: string;
 }) {
-  const active = jobs.filter(
-    (job) => job.status === "queued" || job.status === "running",
-  );
-  const lastFailure = jobs.find((job) => job.status === "failed");
-
-  const shown = [...active, ...(active.length === 0 && lastFailure ? [lastFailure] : [])];
+  const shown = jobsToShow(jobs);
   if (shown.length === 0) return null;
 
   return (

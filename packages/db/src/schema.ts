@@ -207,7 +207,17 @@ export type KeywordRunSummary = {
   totalKeywords?: number;
   gapKeywords?: number;
   clusters?: { name: string; keywordCount: number; totalVolume: number }[];
+  /** Competitors the run actually got ranking data for. */
   competitorsAnalysed?: string[];
+  /**
+   * Competitors the run was asked about.
+   *
+   * Kept alongside the analysed list because zero gaps means three different
+   * things — nobody was asked, they were asked and had no data yet, or they
+   * were asked, had data, and the client genuinely competes — and only the
+   * third is a fact about the market.
+   */
+  competitorsRequested?: string[];
   notes?: string;
 };
 

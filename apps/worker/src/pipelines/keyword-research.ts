@@ -228,7 +228,12 @@ export async function runKeywordResearch(
       await db().insert(keywordsTable).values(rows.slice(i, i + 500));
     }
 
-    const summary = buildSummary(rows, competitorsAnalysed, Boolean(provider));
+    const summary = buildSummary(
+      rows,
+      competitorsAnalysed,
+      competitorDomains,
+      Boolean(provider),
+    );
 
     await db()
       .update(keywordRuns)
@@ -391,6 +396,7 @@ async function clusterInBatches(
 function buildSummary(
   rows: NewKeyword[],
   competitorsAnalysed: string[],
+  competitorsRequested: string[],
   hasVolumeData: boolean,
 ): KeywordRunSummary {
   const byCluster = new Map<string, { count: number; volume: number }>();
@@ -413,6 +419,7 @@ function buildSummary(
       }))
       .sort((a, b) => b.totalVolume - a.totalVolume),
     competitorsAnalysed,
+    competitorsRequested,
     ...(hasVolumeData
       ? {}
       : {
