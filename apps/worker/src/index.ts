@@ -17,6 +17,12 @@ import { describeImageProvider } from "./providers/images.js";
 import { describeKeywordProvider } from "./providers/keywords.js";
 import { runWriteArticle } from "./pipelines/write-article.js";
 import type { StageReporter } from "./pipelines/types.js";
+import {
+  JobTimeoutError,
+  makeReporter,
+  startHeartbeat,
+  withDeadline,
+} from "./progress.js";
 
 /**
  * The worker loop.
@@ -29,9 +35,10 @@ import type { StageReporter } from "./pipelines/types.js";
 let shuttingDown = false;
 let currentJobId: string | null = null;
 
-async function executeJob(job: ClaimedJob): Promise<Record<string, unknown>> {
-  const report = makeReporter(job.id);
-
+async function executeJob(
+  job: ClaimedJob,
+  report: StageReporter,
+): Promise<Record<string, unknown>> {
   switch (job.type) {
     case "crawl_site": {
       const payload = parseJobPayload("crawl_site", job.payload);
@@ -60,44 +67,6 @@ async function executeJob(job: ClaimedJob): Promise<Record<string, unknown>> {
   }
 }
 
-/**
- * Progress callback that also serves as the heartbeat.
- *
- * A stage can run for many minutes between calls, so a background timer keeps
- * the heartbeat alive in between — otherwise the app's reaper would decide the
- * worker had died and requeue a job that is in fact running fine.
- */
-function makeReporter(jobId: string): StageReporter {
-  let latest = { step: 0, totalSteps: 1, label: "Starting" };
-
-  return async (step, totalSteps, label, detail) => {
-    latest = { step, totalSteps, label };
-    log.info(`  [${step}/${totalSteps}] ${label}${detail ? ` — ${detail}` : ""}`);
-    await reportProgress(jobId, {
-      step,
-      totalSteps,
-      label,
-      ...(detail ? { detail } : {}),
-    });
-    void latest;
-  };
-}
-
-function startHeartbeat(jobId: string): () => void {
-  const timer = setInterval(() => {
-    void reportProgress(jobId, {
-      step: 0,
-      totalSteps: 1,
-      label: "Working",
-      detail: "heartbeat",
-    });
-  }, config.heartbeatSeconds * 1000);
-
-  // Do not keep the process alive purely for the heartbeat.
-  timer.unref?.();
-  return () => clearInterval(timer);
-}
-
 async function tick(): Promise<boolean> {
   const job = await claimJob();
   if (!job) return false;
@@ -110,11 +79,24 @@ async function tick(): Promise<boolean> {
 
   // The heartbeat runs alongside the job, not inside the progress callback,
   // because a single stage can be silent for far longer than the reaper's
-  // patience.
-  const stopHeartbeat = startHeartbeat(job.id);
+  // patience. It reports the stage the job is actually on, so "slow" and
+  // "stuck" stay distinguishable from the outside.
+  const { report, current } = makeReporter(job.id, reportProgress, (line) =>
+    log.info(line),
+  );
+  const stopHeartbeat = startHeartbeat(
+    job.id,
+    current,
+    reportProgress,
+    config.heartbeatSeconds * 1000,
+  );
 
   try {
-    const result = await executeJob(job);
+    const result = await withDeadline(
+      executeJob(job, report),
+      current,
+      config.jobTimeoutMinutes * 60_000,
+    );
     await reportComplete(job.id, result);
     log.info(
       `✔ ${job.type} finished in ${Math.round((Date.now() - started) / 1000)}s`,
@@ -123,7 +105,9 @@ async function tick(): Promise<boolean> {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const retryable =
-      error instanceof ClaudeStageError ? error.retryable : isTransient(message);
+      error instanceof ClaudeStageError
+        ? error.retryable
+        : error instanceof JobTimeoutError || isTransient(message);
 
     log.error(`✖ ${job.type} failed: ${message}`);
     await reportFailure(job.id, message, retryable).catch((reportError) => {

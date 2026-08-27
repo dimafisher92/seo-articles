@@ -51,13 +51,26 @@ export type GeoOptions = {
   locale?: string;
 };
 
+/**
+ * Called as a long lookup advances, so a stage that takes minutes can show
+ * movement instead of appearing wedged.
+ */
+export type ProviderProgress = (done: number, total: number) => void;
+
 export interface KeywordProvider {
   readonly name: string;
 
-  /** Volume / difficulty / CPC for an exact keyword list. */
+  /**
+   * Volume / difficulty / CPC for an exact keyword list.
+   *
+   * Throws when every request fails: no metrics at all is a broken integration,
+   * not an empty result, and a table of zeros is worse than an error because a
+   * strategist will act on it.
+   */
   getMetrics(
     keywords: string[],
     geo: GeoOptions,
+    onProgress?: ProviderProgress,
   ): Promise<KeywordMetrics[]>;
 
   /** Expansion around seed terms. */
@@ -65,6 +78,7 @@ export interface KeywordProvider {
     seeds: string[],
     geo: GeoOptions,
     limit?: number,
+    onProgress?: ProviderProgress,
   ): Promise<KeywordMetrics[]>;
 
   /** Keywords a domain already ranks for — the client's own footprint. */

@@ -48,6 +48,12 @@ import { McpHttpClient, unwrapToolResult } from "./mcp-http.js";
 type Json = Record<string, unknown>;
 
 /**
+ * Called as long operations advance, so a stage that takes minutes shows
+ * movement rather than looking wedged. Optional — the probe passes nothing.
+ */
+export type ProviderProgress = (done: number, total: number) => void;
+
+/**
  * Tool names, overridable without a code change.
  *
  * They came from the live catalogue so they are real, but SearchAtlas ships
@@ -222,15 +228,20 @@ export class SearchAtlasProvider implements KeywordProvider {
   async getMetrics(
     keywords: string[],
     geo: GeoOptions,
+    onProgress?: ProviderProgress,
   ): Promise<KeywordMetrics[]> {
     if (keywords.length === 0) return [];
 
     const out: KeywordMetrics[] = [];
-
+    const chunks: string[][] = [];
     // Chunked so one oversized request cannot fail the whole run, and because
     // `wait` blocks server-side while these compute.
     for (let i = 0; i < keywords.length; i += 100) {
-      const chunk = keywords.slice(i, i + 100);
+      chunks.push(keywords.slice(i, i + 100));
+    }
+
+    let failed = 0;
+    for (const [index, chunk] of chunks.entries()) {
       try {
         const payload = await this.call(TOOLS.metrics, {
           keywords: chunk,
@@ -239,17 +250,38 @@ export class SearchAtlasProvider implements KeywordProvider {
           ...this.geoArgs(geo),
         });
 
-        out.push(
-          ...rows(payload)
-            .map(mapMetrics)
-            .filter((metric) => metric.keyword),
-        );
+        const mapped = rows(payload)
+          .map(mapMetrics)
+          .filter((metric) => metric.keyword);
+
+        if (mapped.length === 0) {
+          failed += 1;
+          // Not an error, so nothing would otherwise be said — but a response
+          // this code cannot read looks exactly like "no data" downstream.
+          log.warn(
+            `SearchAtlas returned no readable metrics for ${chunk.length} ` +
+              `keywords. First 300 chars: ${JSON.stringify(payload).slice(0, 300)}`,
+          );
+        }
+        out.push(...mapped);
       } catch (error) {
-        log.warn(
-          `SearchAtlas metrics failed for ${chunk.length} keywords`,
-          error,
-        );
+        failed += 1;
+        log.warn(`SearchAtlas metrics failed for ${chunk.length} keywords`, error);
       }
+      onProgress?.(index + 1, chunks.length);
+    }
+
+    // Every chunk failing is a broken integration, not an empty result set.
+    // Saying so beats a table of zeros a strategist would act on.
+    if (failed === chunks.length) {
+      throw new Error(
+        `SearchAtlas returned no metrics for any of ${keywords.length} keywords ` +
+          `(${chunks.length} request${chunks.length === 1 ? "" : "s"}, all ` +
+          "unsuccessful). The warnings above carry the reason; " +
+          "`pnpm searchatlas:probe --call " +
+          TOOLS.metrics +
+          "` shows the live response shape.",
+      );
     }
 
     return out;
@@ -259,12 +291,13 @@ export class SearchAtlasProvider implements KeywordProvider {
     seeds: string[],
     geo: GeoOptions,
     limit = 500,
+    onProgress?: ProviderProgress,
   ): Promise<KeywordMetrics[]> {
     if (seeds.length === 0) return [];
 
     const collected = new Map<string, KeywordMetrics>();
 
-    for (const seed of seeds) {
+    for (const [index, seed] of seeds.entries()) {
       try {
         // One call gets the seed's own metrics and its related terms, so the
         // seed is recorded too rather than needing a second lookup.
@@ -296,6 +329,7 @@ export class SearchAtlasProvider implements KeywordProvider {
         // hundreds of keywords from the others.
         log.warn(`SearchAtlas lookup failed for "${seed}"`, error);
       }
+      onProgress?.(index + 1, seeds.length);
     }
 
     return [...collected.values()].slice(0, limit);

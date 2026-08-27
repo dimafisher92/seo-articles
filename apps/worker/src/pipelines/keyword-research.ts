@@ -74,13 +74,31 @@ export async function runKeywordResearch(
     await report(2, TOTAL_STEPS, "Pulling keyword volume", `${seeds.length} seeds`);
 
     const provider = createKeywordProvider();
+
+    // These take minutes: one lookup per seed, then bulk metrics the provider
+    // computes server-side. Reporting each step is what keeps the run readable
+    // from the outside — and distinguishes slow from stuck.
     const expanded = provider
-      ? await provider.getRelated(seeds, geo, input.maxKeywords)
+      ? await provider.getRelated(seeds, geo, input.maxKeywords, (done, total) =>
+          void report(
+            2,
+            TOTAL_STEPS,
+            "Expanding keywords",
+            `seed ${done} of ${total}`,
+          ),
+        )
       : [];
 
     // Seeds themselves belong in the table even when expansion is unavailable.
     const seedMetrics = provider
-      ? await provider.getMetrics(seeds, geo)
+      ? await provider.getMetrics(seeds, geo, (done, total) =>
+          void report(
+            2,
+            TOTAL_STEPS,
+            "Pulling keyword volume",
+            `batch ${done} of ${total}`,
+          ),
+        )
       : seeds.map(
           (keyword): KeywordMetrics => ({
             keyword,

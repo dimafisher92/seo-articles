@@ -27,6 +27,16 @@ export const config = {
   pollIntervalSeconds: Number(process.env.POLL_INTERVAL_SECONDS ?? 5),
   /** Seconds between heartbeats while a job runs. */
   heartbeatSeconds: Number(process.env.HEARTBEAT_SECONDS ?? 60),
+  /**
+   * How long one job may run before it is given up on.
+   *
+   * The heartbeat is on a timer and cannot tell whether work is advancing, so
+   * without a deadline a job wedged inside a provider call reports itself alive
+   * forever: the reaper leaves it be and it can be neither waited out nor
+   * cancelled. Generous, because a full article with images legitimately takes
+   * a while.
+   */
+  jobTimeoutMinutes: Number(process.env.JOB_TIMEOUT_MINUTES ?? 30),
 
   searchAtlas: {
     apiKey: optional("SEARCHATLAS_API_KEY"),

@@ -49,6 +49,13 @@ import {
   resolveModel,
 } from "../apps/worker/src/providers/magnific.js";
 import { unwrapToolResult } from "../apps/worker/src/providers/mcp-http.js";
+import {
+  JobTimeoutError,
+  makeReporter,
+  startHeartbeat,
+  withDeadline,
+  type ProgressUpdate,
+} from "../apps/worker/src/progress.js";
 import { SearchAtlasProvider } from "../apps/worker/src/providers/searchatlas.js";
 // The shipping implementations, not copies: the claim query and the reaper are
 // the two places where a subtle change would pass typecheck and still lose or
@@ -569,6 +576,72 @@ async function pureTests(): Promise<void> {
     assert.deepEqual(types, ["BlogPosting"]);
   });
 
+  console.log("\nProgress and deadlines");
+
+  await test("the heartbeat re-sends the stage, not a generic label", async () => {
+    // The regression this guards: a heartbeat that sent its own "Working"
+    // overwrote the real stage a minute after it appeared, which made a slow
+    // job impossible to tell apart from a stuck one.
+    const sent: ProgressUpdate[] = [];
+    const { report, current } = makeReporter("job-1", (_id, update) => {
+      sent.push(update);
+    });
+
+    await report(3, 6, "Analysing content gap", "4 competitors");
+
+    const stop = startHeartbeat("job-1", current, (_id, u) => void sent.push(u), 5);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    stop();
+
+    const beats = sent.slice(1);
+    assert.ok(beats.length > 0, "no heartbeat fired");
+    for (const beat of beats) {
+      assert.equal(beat.label, "Analysing content gap");
+      assert.equal(beat.step, 3);
+      assert.equal(beat.totalSteps, 6);
+    }
+  });
+
+  await test("a job that outlives its deadline fails, naming the stage", async () => {
+    const { report, current } = makeReporter("job-2", () => {});
+    await report(2, 6, "Pulling keyword volume");
+
+    // Never settles — the shape of a provider call that has wedged.
+    const stuck = new Promise<void>(() => {});
+
+    await assert.rejects(
+      withDeadline(stuck, current, 20),
+      (error: unknown) => {
+        assert.ok(error instanceof JobTimeoutError);
+        assert.match(error.message, /Pulling keyword volume/);
+        assert.match(error.message, /step 2\/6/);
+        return true;
+      },
+    );
+  });
+
+  await test("the deadline names the stage it reached, not the one it started on", async () => {
+    const { report, current } = makeReporter("job-3", () => {});
+    await report(1, 6, "Choosing seed keywords");
+
+    const stuck = (async () => {
+      await report(4, 6, "Ranking candidates");
+      await new Promise<void>(() => {});
+    })();
+
+    await assert.rejects(withDeadline(stuck, current, 30), (error: unknown) => {
+      assert.match((error as Error).message, /Ranking candidates/);
+      return true;
+    });
+  });
+
+  await test("finishing in time clears the timer rather than leaking it", async () => {
+    const { current } = makeReporter("job-4", () => {});
+    assert.equal(await withDeadline(Promise.resolve("done"), current, 50), "done");
+    // A leaked timer would keep the event loop alive; the suite exiting proves
+    // it does not.
+  });
+
   console.log("\nMCP over HTTP");
 
   await test("a tool result's text block is unwrapped to its JSON", () => {
@@ -633,6 +706,10 @@ async function pureTests(): Promise<void> {
       });
 
       if (tool === "se_research_keywords") {
+        const asked = (message.params?.arguments?.keywords ?? []) as string[];
+        // Stands in for a response this code cannot read: the request
+        // succeeded, so nothing throws, and yet no row comes out of it.
+        if (asked.includes("unreadable")) return reply(json({ status: "ok" }));
         return reply(
           json({
             project: {
@@ -726,6 +803,27 @@ async function pureTests(): Promise<void> {
         gap[0]?.competitors.map((c) => c.domain).sort(),
         ["rival-a.com", "rival-b.com"],
       );
+    });
+
+    await test("no metrics at all is an error, not a table of zeros", async () => {
+      // The failure this prevents: every request coming back unreadable, the
+      // run completing, and a strategist acting on a column of zeros.
+      await assert.rejects(
+        provider.getMetrics(["unreadable"], geo),
+        (error: unknown) => {
+          assert.match((error as Error).message, /no metrics for any of 1/);
+          assert.match((error as Error).message, /searchatlas:probe/);
+          return true;
+        },
+      );
+    });
+
+    await test("progress is reported as batches and seeds complete", async () => {
+      const seen: string[] = [];
+      await provider.getRelated(["a", "b"], geo, 10, (done, total) =>
+        seen.push(`${done}/${total}`),
+      );
+      assert.deepEqual(seen, ["1/2", "2/2"]);
     });
 
     await test("a gap needs competitors, and never counts the client", async () => {
