@@ -212,7 +212,7 @@ async function main(): Promise<void> {
   const apiKey = process.env.SEARCHATLAS_API_KEY?.trim();
   if (!apiKey) {
     bad("SEARCHATLAS_API_KEY is not set in apps/worker/.env");
-    info("Add it there, or run `pnpm setup`, then try again.");
+    info("Add it there, or run `pnpm run configure`, then try again.");
     process.exit(1);
   }
   ok(`key loaded (${apiKey.slice(0, 6)}…${apiKey.slice(-4)})`);

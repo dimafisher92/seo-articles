@@ -248,7 +248,7 @@ override it where they conflict.
 ## Development
 
 ```bash
-pnpm setup          # write both env files
+pnpm run configure          # write both env files
 pnpm dev            # Next.js on :3000
 pnpm worker         # the worker
 pnpm magnific:probe # verify image generation against the live API

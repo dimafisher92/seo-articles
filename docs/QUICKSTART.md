@@ -149,7 +149,7 @@ pause takes a second or two — that is normal, not a fault.
 You also want the **direct** string — the same URL *without* `-pooler`. Schema
 migrations cannot run over PgBouncer, and when they try they fail in ways that
 never mention pooling (`prepared statement "s0" already exists`, a `SET` that
-does not survive its own transaction). `pnpm setup` asks for both.
+does not survive its own transaction). `pnpm run configure` asks for both.
 
 Create the tables:
 
@@ -200,7 +200,7 @@ Two files, neither committed. The quickest way is to let the setup script write
 both:
 
 ```powershell
-pnpm setup
+pnpm run configure
 ```
 
 It asks for the values you collected above, generates the random secrets, and —
@@ -331,7 +331,7 @@ without it there is no content gap analysis.
 ## 9. Magnific for images
 
 Get an API key from the Magnific dashboard and put it in `apps\worker\.env` as
-`MAGNIFIC_API_KEY` (or answer the question in `pnpm setup`). Then verify it:
+`MAGNIFIC_API_KEY` (or answer the question in `pnpm run configure`). Then verify it:
 
 ```powershell
 pnpm magnific:probe

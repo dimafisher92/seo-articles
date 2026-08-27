@@ -6,6 +6,7 @@
     "node": ">=20.11"
   },
   "scripts": {
+    "configure": "tsx scripts/setup.ts",
     "setup": "tsx scripts/setup.ts",
     "build": "pnpm --filter @seo/web build",
     "dev": "pnpm --filter @seo/web dev",
