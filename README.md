@@ -135,52 +135,53 @@ columns blank and says so in the UI.
 
 ### Magnific — image generation
 
-Driven through Magnific's **remote MCP server**. Authenticate once:
+Magnific is the rebranded Freepik platform. Set `MAGNIFIC_API_KEY` from its
+dashboard and that is the whole setup — `api.freepik.com` accepts the same key
+if you ever need to switch hosts, and the auth header follows the base URL.
+
+**Run the probe once before the first real generation:**
 
 ```bash
-claude mcp add --transport http magnific https://mcp.magnific.com
+pnpm magnific:probe
 ```
 
-Complete the browser sign-in and that is the whole setup. There is no API key
-to manage, generation runs on your Magnific account's credits, and the server
-exposes far more models than the REST endpoint.
+The endpoint paths and request bodies come from Magnific's published API
+reference, but could not be exercised where this code was written — the network
+there blocks `api.magnific.com`. The probe performs the whole round trip from a
+machine that can reach it, prints exactly what came back, and says whether the
+shipping adapter understood it. A field-name difference then surfaces in two
+minutes rather than part-way through writing an article.
 
-The worker declares the same server in code and reuses that session. **The name
-and URL must match exactly.** The Agent SDK keys the stored OAuth token on the
-server name plus a hash of `{type, url, headers}`, so `Magnific` instead of
-`magnific`, or a trailing slash on the URL, produces a different key and shows
-up as `needs-auth`. Both are constants in
-`apps/worker/src/providers/magnific-mcp.ts` for that reason.
+#### Choosing a model
 
-On startup the worker reports the session state:
+`MAGNIFIC_IMAGE_MODEL` picks one, and it is pinned rather than chosen per image
+so cost stays predictable and a client's articles share one visual language.
 
-```
-Images: Magnific over MCP · model <name>
-```
+| Slug | Model | Roughly |
+|---|---|---|
+| `nano-banana-pro-flash` | **Nano Banana 2** (Gemini 3.1 Flash) — the default | up to ~$0.30/image at 4K |
+| `mystic` | Magnific's own | ~$0.069/image at 1K |
+| `flux-dev` | the cheap one | ~$0.012/image |
 
-If it instead warns about `needs-auth`, run the command above and restart.
-Articles still generate meanwhile — they just fall back to the client's own
-uploaded photos.
+At four images an article that is a real spread — worth a look at the bill
+before generating in bulk. Switching is one line in `apps/worker/.env`.
 
-`MAGNIFIC_IMAGE_MODEL` pins which generation model to ask for. It is pinned
-rather than chosen per image so cost stays predictable and a client's articles
-share one visual language.
+None of these are free. The free 20-images-a-day tier is the website, is
+watermarked, and is licensed for personal use, so it cannot be used for client
+work. The API bills prepaid credits; pay-per-usage was discontinued in June 2026.
 
-The **style reference** is the other thing worth setting: nominate one Brand
-Vault image and generated imagery matches its palette, lighting and treatment.
-Without one, results look like generic stock.
+Each model takes its style reference differently — Mystic wants a
+`style_reference` URL and an adherence weight, the Gemini-backed models want
+`reference_images` entries carrying an image, a description and a MIME type.
+That is why `MODELS` in `apps/worker/src/providers/magnific.ts` is a registry
+where each entry builds its own request body, rather than a table of paths.
 
-#### Falling back to the REST adapter
+The **style reference** itself is the setting worth caring about: nominate one
+Brand Vault image and generated imagery matches its palette, lighting and
+treatment. Without one, results look like generic stock.
 
-Set `MAGNIFIC_TRANSPORT=rest` with `MAGNIFIC_API_KEY` to use the API-key
-adapter (`POST /v1/ai/mystic`, poll until complete) instead. That is the right
-choice where a one-time browser OAuth flow is impractical — a worker on a VPS,
-for instance. Note the REST request and response shapes were never verified
-against live documentation, so MCP is the better-supported path.
-
-With `MAGNIFIC_TRANSPORT=rest` and no key set, images are disabled entirely and
-articles use only uploaded brand assets. That is deliberate: silently falling
-back to MCP would ignore an explicit opt-out and spend credits unexpectedly.
+Without `MAGNIFIC_API_KEY`, articles use only the photos uploaded to the Brand
+Vault. That is a supported way to work, not a failure.
 
 ---
 
@@ -197,8 +198,8 @@ weak draft can be re-run without paying for a fresh SERP crawl.
 4. **QA** — reviewed against the playbook and the failing automated checks.
 5. **Revise** — applies the fixes and strips the machine tells.
 6. **Metadata** — title tag, meta description, slug, FAQ, JSON-LD.
-7. **Images** — hero plus 2-3 in-body, generated through Magnific's MCP
-   server or picked from the vault.
+7. **Images** — hero plus 2-3 in-body, generated through Magnific or picked
+   from the vault.
 8. **Assemble** — images placed under their planned headings, final scoring.
 
 ### Tuning the output
@@ -218,8 +219,10 @@ override it where they conflict.
 ## Development
 
 ```bash
+pnpm setup          # write both env files
 pnpm dev            # Next.js on :3000
 pnpm worker         # the worker
+pnpm magnific:probe # verify image generation against the live API
 pnpm typecheck      # every package
 pnpm db:studio      # browse the database
 DATABASE_URL="postgres://…" pnpm smoke   # test suite

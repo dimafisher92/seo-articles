@@ -34,22 +34,17 @@ export const config = {
   },
 
   magnific: {
+    apiKey: optional("MAGNIFIC_API_KEY"),
     /**
-     * `mcp` (the default) drives Magnific through its remote MCP server, using
-     * the OAuth session from `claude mcp add` and the account's own credits.
-     * `rest` falls back to the API-key adapter — the right choice when the
-     * worker runs somewhere a browser OAuth flow is impractical.
-     */
-    transport: (optional("MAGNIFIC_TRANSPORT") ?? "mcp") as "mcp" | "rest",
-    /**
-     * Which generation model to ask for, e.g. a Nano Banana or Seedream
-     * variant. Pinned rather than chosen per image so cost stays predictable
-     * and a client's articles share one visual language.
+     * Which generation model to use. Pinned rather than chosen per image so
+     * cost stays predictable and a client's articles share one visual
+     * language. See MODELS in providers/magnific.ts for the options.
      */
     imageModel: optional("MAGNIFIC_IMAGE_MODEL"),
-
-    // Used only by the REST fallback.
-    apiKey: optional("MAGNIFIC_API_KEY"),
+    /**
+     * Magnific is the rebranded Freepik platform; api.freepik.com works with
+     * the same key. The auth header name follows from this value.
+     */
     baseUrl: optional("MAGNIFIC_BASE_URL") ?? "https://api.magnific.com",
   },
 

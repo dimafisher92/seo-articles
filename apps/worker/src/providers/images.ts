@@ -2,56 +2,38 @@ import type { ImageProvider } from "@seo/shared";
 
 import { config } from "../config.js";
 import { log } from "../log.js";
-import { MagnificProvider } from "./magnific.js";
-import { MagnificMcpProvider, MCP_ADD_COMMAND } from "./magnific-mcp.js";
-
-export type ImageTransport = "mcp" | "rest" | "none";
+import { MagnificProvider, resolveModel } from "./magnific.js";
 
 /**
- * Decides which image transport to use.
+ * Builds the image provider, or returns null when no key is configured.
  *
- * Split out from the factory so the precedence is testable without
- * manipulating the environment: MCP is the default because the server is
- * self-describing, needs no key, and exposes far more models than the REST
- * endpoint. REST is an explicit opt-out for the case MCP cannot cover — a
- * worker running somewhere a one-time browser OAuth flow is impractical.
- *
- * `none` is a supported outcome, not a failure: articles then use only the
- * images uploaded to the client's Brand Vault.
+ * Null is a supported outcome rather than a failure: articles then use only the
+ * photos uploaded to the client's Brand Vault, which is a reasonable way to
+ * work and keeps a missing key from blocking the whole pipeline.
  */
-export function selectImageTransport(input: {
-  transport: string;
-  hasApiKey: boolean;
-}): ImageTransport {
-  if (input.transport === "rest") {
-    return input.hasApiKey ? "rest" : "none";
+export function createImageProvider(): ImageProvider | null {
+  if (!config.magnific.apiKey) {
+    log.warn(
+      "MAGNIFIC_API_KEY is not set — articles will only use uploaded brand assets.",
+    );
+    return null;
   }
-  return "mcp";
+  return new MagnificProvider(
+    config.magnific.apiKey,
+    config.magnific.baseUrl,
+    config.magnific.imageModel,
+  );
 }
 
-export function createImageProvider(): ImageProvider | null {
-  const transport = selectImageTransport({
-    transport: config.magnific.transport,
-    hasApiKey: Boolean(config.magnific.apiKey),
-  });
-
-  switch (transport) {
-    case "rest":
-      return new MagnificProvider(config.magnific.apiKey!);
-
-    case "mcp":
-      // Whether the session is actually authenticated is reported separately
-      // by the startup preflight; constructing the provider does not prove it.
-      log.debug(
-        `Image provider: Magnific over MCP (authenticate with: ${MCP_ADD_COMMAND})`,
-      );
-      return new MagnificMcpProvider();
-
-    case "none":
-      log.warn(
-        "MAGNIFIC_TRANSPORT=rest but MAGNIFIC_API_KEY is not set — articles " +
-          "will only use uploaded brand assets.",
-      );
-      return null;
+/** One line for the startup banner, so the model in use is never a guess. */
+export function describeImageProvider(): string {
+  if (!config.magnific.apiKey) {
+    return "Images: none configured — brand assets only";
+  }
+  try {
+    const model = resolveModel(config.magnific.imageModel);
+    return `Images: Magnific · ${model.label} (${model.costNote})`;
+  } catch (error) {
+    return `Images: ${error instanceof Error ? error.message : String(error)}`;
   }
 }

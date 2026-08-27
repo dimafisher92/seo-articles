@@ -39,12 +39,12 @@ import {
 } from "@seo/shared";
 import { and, eq, sql } from "drizzle-orm";
 
-import { selectImageTransport } from "../apps/worker/src/providers/images.js";
 import {
-  MCP_ADD_COMMAND,
-  MCP_SERVER_NAME,
-  MCP_URL,
-} from "../apps/worker/src/providers/magnific-mcp.js";
+  authHeaderFor,
+  DEFAULT_MODEL,
+  MODELS,
+  resolveModel,
+} from "../apps/worker/src/providers/magnific.js";
 import { renderEnvFiles } from "./setup.js";
 
 const db = getDb;
@@ -332,45 +332,77 @@ async function pureTests(): Promise<void> {
     assert.equal(check?.passed, false);
   });
 
-  section("Image transport");
+  section("Image models");
 
-  await test("MCP is the default; REST is an explicit opt-out", () => {
-    assert.equal(
-      selectImageTransport({ transport: "mcp", hasApiKey: false }),
-      "mcp",
-    );
-    // MCP needs no key, so its absence must not silently disable images.
-    assert.equal(
-      selectImageTransport({ transport: "", hasApiKey: false }),
-      "mcp",
-    );
-    assert.equal(
-      selectImageTransport({ transport: "rest", hasApiKey: true }),
-      "rest",
+  await test("the default model is Nano Banana 2", () => {
+    assert.equal(DEFAULT_MODEL, "nano-banana-pro-flash");
+    assert.equal(resolveModel(undefined).path, MODELS[DEFAULT_MODEL]?.path);
+    assert.equal(resolveModel("").path, MODELS[DEFAULT_MODEL]?.path);
+  });
+
+  await test("every model has its own endpoint path", () => {
+    const paths = Object.values(MODELS).map((m) => m.path);
+    assert.equal(new Set(paths).size, paths.length, "two models share a path");
+    for (const [slug, model] of Object.entries(MODELS)) {
+      assert.ok(model.path.startsWith("/v1/ai/"), `${slug}: unexpected path`);
+      assert.ok(model.label, `${slug}: no label`);
+      assert.ok(model.costNote, `${slug}: no cost note`);
+    }
+  });
+
+  await test("an unknown model names the ones that exist", () => {
+    assert.throws(
+      () => resolveModel("nano-banana-2"),
+      (error: Error) =>
+        /Unknown MAGNIFIC_IMAGE_MODEL/.test(error.message) &&
+        error.message.includes("nano-banana-pro-flash"),
     );
   });
 
-  await test("REST without a key degrades to brand assets, not to MCP", () => {
-    // Silently falling back to MCP would ignore a deliberate opt-out and could
-    // spend Magnific credits the operator did not intend to spend.
-    assert.equal(
-      selectImageTransport({ transport: "rest", hasApiKey: false }),
-      "none",
-    );
+  await test("each model carries the style reference its own way", () => {
+    const request = {
+      prompt: "a banana",
+      aspectRatio: "3:2" as const,
+      resolution: "1k" as const,
+      styleReferenceUrl: "https://blob.test/brand.jpg",
+    };
+
+    // This is the reason for a per-model registry rather than a path swap:
+    // sending Mystic's shape to Nano Banana would leave the style reference
+    // silently ignored, and brand consistency is what it exists for.
+    const nano = MODELS["nano-banana-pro-flash"]?.buildBody(request) as {
+      reference_images?: { image: string; text: string; mime_type: string }[];
+      style_reference?: unknown;
+    };
+    assert.ok(nano.reference_images, "Nano Banana lost the style reference");
+    assert.equal(nano.reference_images?.[0]?.image, request.styleReferenceUrl);
+    assert.equal(nano.reference_images?.[0]?.mime_type, "image/jpeg");
+    assert.equal(nano.style_reference, undefined, "wrong field for this model");
+
+    const mystic = MODELS["mystic"]?.buildBody(request) as {
+      style_reference?: string;
+      adherence?: number;
+      reference_images?: unknown;
+    };
+    assert.equal(mystic.style_reference, request.styleReferenceUrl);
+    assert.equal(typeof mystic.adherence, "number");
+    assert.equal(mystic.reference_images, undefined, "wrong field for this model");
   });
 
-  await test("the MCP identity matches what `claude mcp add` registers", () => {
-    // The SDK keys the stored OAuth token on the server name and a hash of
-    // {type, url, headers}. A trailing slash, a capital letter or a different
-    // name yields a different key and presents as "needs-auth", so these are
-    // pinned rather than left to drift.
-    assert.equal(MCP_SERVER_NAME, MCP_SERVER_NAME.toLowerCase());
-    assert.ok(MCP_URL.startsWith("https://"), "MCP URL must be https");
-    assert.ok(!MCP_URL.endsWith("/"), "MCP URL must not have a trailing slash");
-    assert.equal(
-      MCP_ADD_COMMAND,
-      `claude mcp add --transport http ${MCP_SERVER_NAME} ${MCP_URL}`,
-    );
+  await test("resolution is upper-cased for the API", () => {
+    const body = MODELS[DEFAULT_MODEL]?.buildBody({
+      prompt: "x",
+      aspectRatio: "16:9",
+      resolution: "2k",
+    }) as { resolution?: string; aspect_ratio?: string };
+    assert.equal(body.resolution, "2K");
+    assert.equal(body.aspect_ratio, "16:9");
+  });
+
+  await test("the auth header follows the host", () => {
+    // Magnific is the rebranded Freepik; one key, two hosts, two header names.
+    assert.equal(authHeaderFor("https://api.magnific.com"), "x-magnific-api-key");
+    assert.equal(authHeaderFor("https://api.freepik.com"), "x-freepik-api-key");
   });
 
   section("Setup");
@@ -383,6 +415,7 @@ async function pureTests(): Promise<void> {
       claudeToken: "sk-ant-oat01-x",
       blobToken: "vercel_blob_rw_x",
       searchAtlasKey: "sa-x",
+      magnificKey: "MS-x",
       appUrl: "http://localhost:3000",
     });
 
@@ -401,6 +434,7 @@ async function pureTests(): Promise<void> {
       claudeToken: "",
       blobToken: "",
       searchAtlasKey: "",
+      magnificKey: "",
       appUrl: "http://localhost:3000",
     });
 
@@ -417,6 +451,7 @@ async function pureTests(): Promise<void> {
       claudeToken: "sk-ant-oat01-token",
       blobToken: "vercel_blob_rw_token",
       searchAtlasKey: "sa-key",
+      magnificKey: "MS-magnific-key",
       appUrl: "https://example.vercel.app",
     });
 
@@ -427,6 +462,10 @@ async function pureTests(): Promise<void> {
     // Blob writes happen app-side, so the token belongs there only.
     assert.ok(web.includes("vercel_blob_rw_token"));
     assert.ok(!worker.includes("vercel_blob_rw_token"));
+
+    // Provider keys are the worker's business; the app never calls Magnific.
+    assert.ok(worker.includes("MS-magnific-key"));
+    assert.ok(!web.includes("MS-magnific-key"));
 
     assert.ok(worker.includes('APP_URL="https://example.vercel.app"'));
     assert.ok(web.includes("postgres://u:p@host/db"));

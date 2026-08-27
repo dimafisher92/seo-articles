@@ -21,12 +21,12 @@ Budget about 30 minutes, most of it waiting on installers and signups.
 | **Neon** account | Postgres database | free tier is plenty |
 | **Vercel** account | Image storage (Blob), and later the deployment | free tier |
 | **Claude** subscription | Writes the articles | you have this |
-| **Magnific** account | Generates the images | credits |
+| **Magnific** API key | Generates the images | prepaid credits |
 | **SearchAtlas** API key | Keyword volume and rankings | your plan |
 
 The last two are optional to *start*. Without SearchAtlas the keyword table has
-no volume figures; without Magnific articles use only uploaded photos. Both are
-worth adding, but neither blocks a first run.
+no volume figures; without Magnific, articles use only the photos you upload.
+Both are worth adding, but neither blocks a first run.
 
 ---
 
@@ -212,8 +212,9 @@ CLAUDE_CODE_OAUTH_TOKEN="sk-ant-oat01-…"
 # Optional — without it the keyword table has no volume or difficulty figures.
 SEARCHATLAS_API_KEY=""
 
-# Images come from Magnific's MCP server; see step 8. No key needed here.
-MAGNIFIC_TRANSPORT="mcp"
+# Optional — without it, articles use only uploaded brand photos. See step 8.
+MAGNIFIC_API_KEY=""
+MAGNIFIC_IMAGE_MODEL="nano-banana-pro-flash"
 ```
 
 `WORKER_SECRET` must be **identical** in both files — it is how the worker
@@ -270,36 +271,49 @@ reached the app, authenticated, and is ready.
 
 ## 8. Magnific for images
 
-Register the MCP server globally, then authenticate:
+Get an API key from the Magnific dashboard and put it in `apps\worker\.env` as
+`MAGNIFIC_API_KEY` (or answer the question in `pnpm setup`). Then verify it:
 
 ```powershell
-claude mcp add --transport http magnific https://mcp.magnific.com --scope user
+pnpm magnific:probe
 ```
 
-`--scope user` matters: without it the server is only visible inside whatever
-directory you happened to be in. If you already added it with the default local
-scope, clean that up first:
+This is worth doing before your first article. The adapter's endpoints come from
+Magnific's published reference but were never exercised against the live API
+where this code was written, so the probe runs the whole round trip from your
+machine and reports whether the shipping code understood the response. It asks
+before spending credits.
 
-```powershell
-claude mcp remove magnific --scope local
-```
-
-Registering is not the same as authenticating. Start a Claude Code session, run
-`/mcp`, pick `magnific`, and complete the browser sign-in.
-
-Restart the worker. It should now print:
+Expected ending:
 
 ```
-Images: Magnific over MCP
+Verdict: the adapter is compatible with the live API.
 ```
 
-The OAuth token is stored globally in `C:\Users\dimaf\.claude\.credentials.json`,
-keyed by the server name and URL — not by directory — so once you have signed in
-anywhere, the worker picks it up.
+If it reports a mismatch, send the output — it prints the raw responses so the
+field names can be corrected.
 
-If it instead says `needs-auth`, the name or URL does not match what the worker
-declares. It must be exactly `magnific` and `https://mcp.magnific.com`, with no
-trailing slash.
+Restart the worker and it should print:
+
+```
+Images: Magnific · Nano Banana 2 (Gemini 3.1 Flash)
+```
+
+### A note on cost
+
+The default model, Nano Banana 2, is the best of the three and also the dearest
+— up to about $0.30 an image at 4K. At four images an article that adds up. The
+alternatives are in `apps\worker\.env`:
+
+```ini
+MAGNIFIC_IMAGE_MODEL="flux-dev"   # roughly a twentieth the cost
+```
+
+None of them are free. The free 20-images-a-day tier is the website, is
+watermarked, and is personal-use only, so it will not do for client work.
+
+Without a key at all, articles use only the photos you uploaded to the Brand
+Vault — which is a perfectly reasonable way to work.
 
 ---
 

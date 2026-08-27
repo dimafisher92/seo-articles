@@ -13,7 +13,7 @@ import { runContentPlan } from "./pipelines/content-plan.js";
 import { runCrawlSite } from "./pipelines/crawl-site.js";
 import { runKeywordResearch } from "./pipelines/keyword-research.js";
 import { runRegenerateImage } from "./pipelines/regenerate-image.js";
-import { reportMagnificMcpHealth } from "./providers/magnific-mcp.js";
+import { describeImageProvider } from "./providers/images.js";
 import { runWriteArticle } from "./pipelines/write-article.js";
 import type { StageReporter } from "./pipelines/types.js";
 
@@ -153,18 +153,7 @@ async function main(): Promise<void> {
       `model ${config.claude.model}`,
   );
 
-  // Checked up front rather than on the first article: an unauthenticated MCP
-  // session would otherwise surface after the SERP crawl and draft have
-  // already been paid for.
-  if (config.magnific.transport === "rest") {
-    log.info(
-      config.magnific.apiKey
-        ? "Images: Magnific over REST (API key)"
-        : "Images: none configured — brand assets only",
-    );
-  } else {
-    await reportMagnificMcpHealth();
-  }
+  log.info(describeImageProvider());
 
   let idleLogged = false;
 

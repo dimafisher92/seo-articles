@@ -15,14 +15,16 @@
     "db:studio": "pnpm --filter @seo/db studio",
     "typecheck": "pnpm -r typecheck",
     "lint": "pnpm -r lint",
-    "smoke": "tsx scripts/smoke.ts"
+    "smoke": "tsx scripts/smoke.ts",
+    "magnific:probe": "tsx scripts/magnific-probe.ts"
   },
   "devDependencies": {
     "@seo/db": "workspace:*",
     "@seo/shared": "workspace:*",
+    "@types/node": "^22.18.1",
+    "dotenv": "^16.6.1",
     "drizzle-orm": "^0.44.5",
     "tsx": "^4.20.6",
-    "typescript": "^5.9.2",
-    "@types/node": "^22.18.1"
+    "typescript": "^5.9.2"
   }
 }

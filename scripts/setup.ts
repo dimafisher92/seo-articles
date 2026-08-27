@@ -27,6 +27,7 @@ export type SetupAnswers = {
   claudeToken: string;
   blobToken: string;
   searchAtlasKey: string;
+  magnificKey: string;
   appUrl: string;
 };
 
@@ -77,11 +78,10 @@ CLAUDE_FAST_MODEL="claude-sonnet-5"
 
 SEARCHATLAS_API_KEY="${answers.searchAtlasKey}"
 
-# Images run through Magnific's MCP server; authenticate once with
-#   claude mcp add --transport http magnific https://mcp.magnific.com --scope user
-# then run /mcp in a Claude Code session and sign in. No API key needed.
-MAGNIFIC_TRANSPORT="mcp"
-MAGNIFIC_IMAGE_MODEL=""
+MAGNIFIC_API_KEY="${answers.magnificKey}"
+# nano-banana-pro-flash is Nano Banana 2 and the best of the three, but also
+# the dearest. Swap to flux-dev (~a twentieth the cost) if the bill bites.
+MAGNIFIC_IMAGE_MODEL="nano-banana-pro-flash"
 
 LOG_LEVEL="info"
 `;
@@ -182,6 +182,11 @@ async function main(): Promise<void> {
           "From SearchAtlas → Dashboard → API Settings. Without it, keyword runs\n" +
           "  still cluster and find content gaps but show no volume figures.",
       }),
+      magnificKey: await ask(rl, "MAGNIFIC_API_KEY", {
+        note:
+          "From the Magnific dashboard. Without it, articles use only the photos\n" +
+          "  you upload to a client's Brand Vault — no generated imagery.",
+      }),
       appUrl:
         (await ask(rl, "APP_URL", {
           note:
@@ -198,6 +203,9 @@ async function main(): Promise<void> {
     console.log("    pnpm db:push        create the tables");
     console.log("    pnpm dev            the app, on http://localhost:3000");
     console.log("    pnpm worker         in a second terminal\n");
+    if (answers.magnificKey) {
+      console.log("    pnpm magnific:probe verify image generation works\n");
+    }
 
     const missing = [
       !answers.claudeToken &&
@@ -206,6 +214,8 @@ async function main(): Promise<void> {
         "BLOB_READ_WRITE_TOKEN — image upload and saving will fail",
       !answers.searchAtlasKey &&
         "SEARCHATLAS_API_KEY — keyword runs will have no volume data",
+      !answers.magnificKey &&
+        "MAGNIFIC_API_KEY — articles will have no generated images",
     ].filter((line): line is string => Boolean(line));
 
     if (missing.length > 0) {

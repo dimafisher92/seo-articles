@@ -102,3 +102,8 @@ export function extractJson(raw: string): unknown {
     `Unterminated JSON in model output: ${text.slice(start, start + 200)}`,
   );
 }
+
+/** Pauses execution. Used by polling loops and retry backoff. */
+export function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
