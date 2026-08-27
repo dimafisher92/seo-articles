@@ -5,7 +5,6 @@ import type {
 } from "@seo/shared";
 
 import { config } from "../config.js";
-import { log } from "../log.js";
 import { sleep } from "../claude.js";
 
 /**
@@ -158,15 +157,4 @@ export class MagnificProvider implements ImageProvider {
       `Magnific task ${taskId} did not finish within ${POLL_TIMEOUT_MS / 1000}s`,
     );
   }
-}
-
-export function createImageProvider(): ImageProvider | null {
-  const apiKey = config.magnific.apiKey;
-  if (!apiKey) {
-    log.warn(
-      "MAGNIFIC_API_KEY is not set — articles will only use uploaded brand assets.",
-    );
-    return null;
-  }
-  return new MagnificProvider(apiKey);
 }

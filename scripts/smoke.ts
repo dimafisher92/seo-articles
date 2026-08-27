@@ -39,6 +39,13 @@ import {
 } from "@seo/shared";
 import { and, eq, sql } from "drizzle-orm";
 
+import { selectImageTransport } from "../apps/worker/src/providers/images.js";
+import {
+  MCP_ADD_COMMAND,
+  MCP_SERVER_NAME,
+  MCP_URL,
+} from "../apps/worker/src/providers/magnific-mcp.js";
+
 const db = getDb;
 
 let passed = 0;
@@ -322,6 +329,47 @@ async function pureTests(): Promise<void> {
     });
     const check = result.checks.find((c) => c.id === "paragraph-length");
     assert.equal(check?.passed, false);
+  });
+
+  section("Image transport");
+
+  await test("MCP is the default; REST is an explicit opt-out", () => {
+    assert.equal(
+      selectImageTransport({ transport: "mcp", hasApiKey: false }),
+      "mcp",
+    );
+    // MCP needs no key, so its absence must not silently disable images.
+    assert.equal(
+      selectImageTransport({ transport: "", hasApiKey: false }),
+      "mcp",
+    );
+    assert.equal(
+      selectImageTransport({ transport: "rest", hasApiKey: true }),
+      "rest",
+    );
+  });
+
+  await test("REST without a key degrades to brand assets, not to MCP", () => {
+    // Silently falling back to MCP would ignore a deliberate opt-out and could
+    // spend Magnific credits the operator did not intend to spend.
+    assert.equal(
+      selectImageTransport({ transport: "rest", hasApiKey: false }),
+      "none",
+    );
+  });
+
+  await test("the MCP identity matches what `claude mcp add` registers", () => {
+    // The SDK keys the stored OAuth token on the server name and a hash of
+    // {type, url, headers}. A trailing slash, a capital letter or a different
+    // name yields a different key and presents as "needs-auth", so these are
+    // pinned rather than left to drift.
+    assert.equal(MCP_SERVER_NAME, MCP_SERVER_NAME.toLowerCase());
+    assert.ok(MCP_URL.startsWith("https://"), "MCP URL must be https");
+    assert.ok(!MCP_URL.endsWith("/"), "MCP URL must not have a trailing slash");
+    assert.equal(
+      MCP_ADD_COMMAND,
+      `claude mcp add --transport http ${MCP_SERVER_NAME} ${MCP_URL}`,
+    );
   });
 
   section("Rendering");

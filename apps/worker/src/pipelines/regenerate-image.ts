@@ -5,7 +5,7 @@ import { imageSpecForRole, markdownToHtml } from "@seo/shared";
 
 import { ingestImage } from "../api.js";
 import { db, loadClient } from "../data.js";
-import { createImageProvider } from "../providers/magnific.js";
+import { createImageProvider } from "../providers/images.js";
 import type { StageReporter } from "./types.js";
 
 export type RegenerateImageInput = {
@@ -28,7 +28,10 @@ export async function runRegenerateImage(
   const provider = createImageProvider();
   if (!provider) {
     throw new Error(
-      "MAGNIFIC_API_KEY is not set on the worker, so images cannot be generated.",
+      "No image provider is configured on the worker, so images cannot be " +
+        "generated. Either authenticate Magnific's MCP server " +
+        "(claude mcp add --transport http magnific https://mcp.magnific.com) " +
+        "or set MAGNIFIC_TRANSPORT=rest with MAGNIFIC_API_KEY.",
     );
   }
 

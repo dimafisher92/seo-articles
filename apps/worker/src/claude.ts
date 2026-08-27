@@ -12,11 +12,21 @@ import { log } from "./log.js";
  * does not cost a fresh SERP crawl.
  */
 
+/** Remote MCP servers are the only kind a stage may reach. */
+export type McpHttpServers = Record<string, { type: "http"; url: string }>;
+
 export type RunOptions = {
   /** JSON Schema the response must satisfy. */
   schema: Record<string, unknown>;
   /** Built-in tools the stage may use. Omit for a pure reasoning stage. */
   tools?: string[];
+  /**
+   * MCP servers whose tools the stage may call, keyed by server name. Their
+   * tools arrive as `mcp__<server>__<tool>` and are independent of `tools`,
+   * which governs only the built-in set — so a stage can reach an MCP server
+   * without also gaining Bash or WebSearch.
+   */
+  mcpServers?: McpHttpServers;
   model?: string;
   maxTurns?: number;
   /** Aborts the stage if it runs away. */
@@ -88,8 +98,13 @@ export async function runStage<T>(
     systemPrompt: undefined,
     tools: options.tools ?? [],
     ...(options.tools?.length ? { allowedTools: options.tools } : {}),
+    ...(options.mcpServers ? { mcpServers: options.mcpServers } : {}),
     permissionMode: "bypassPermissions",
-    maxTurns: options.maxTurns ?? (options.tools?.length ? 40 : 4),
+    // A stage with tools of any kind needs room to call them; the tight
+    // default is only right for pure reasoning.
+    maxTurns:
+      options.maxTurns ??
+      (options.tools?.length || options.mcpServers ? 40 : 4),
     outputFormat: { type: "json_schema", schema: options.schema },
     env: buildEnv(),
     // The worker runs from a scratch directory; no repository context is wanted.

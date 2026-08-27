@@ -43,7 +43,7 @@ import {
   toBrandContext,
 } from "../data.js";
 import { log } from "../log.js";
-import { createImageProvider } from "../providers/magnific.js";
+import { createImageProvider } from "../providers/images.js";
 import {
   draftSchema,
   imagePlanSchema,
