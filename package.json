@@ -2,7 +2,9 @@
   "name": "seo-articles",
   "private": true,
   "packageManager": "pnpm@10.33.0",
-  "engines": { "node": ">=20.11" },
+  "engines": {
+    "node": ">=20.11"
+  },
   "scripts": {
     "build": "pnpm --filter @seo/web build",
     "dev": "pnpm --filter @seo/web dev",
@@ -11,6 +13,15 @@
     "db:push": "pnpm --filter @seo/db push",
     "db:studio": "pnpm --filter @seo/db studio",
     "typecheck": "pnpm -r typecheck",
-    "lint": "pnpm -r lint"
+    "lint": "pnpm -r lint",
+    "smoke": "tsx scripts/smoke.ts"
+  },
+  "devDependencies": {
+    "@seo/db": "workspace:*",
+    "@seo/shared": "workspace:*",
+    "drizzle-orm": "^0.44.5",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.2",
+    "@types/node": "^22.18.1"
   }
 }

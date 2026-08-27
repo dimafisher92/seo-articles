@@ -1,6 +1,6 @@
 /// <reference types="next" />
 /// <reference types="next/image-types/global" />
+/// <reference path="./.next/types/routes.d.ts" />
 
-// Next injects CSS module typings during `next dev`/`next build`; a bare
-// `tsc --noEmit` does not see them, so the side-effect import is declared here.
-declare module "*.css";
+// NOTE: This file should not be edited
+// see https://nextjs.org/docs/app/api-reference/config/typescript for more information.

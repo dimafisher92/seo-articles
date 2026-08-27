@@ -1,4 +1,5 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
+import { z } from "zod";
 
 import { jobs } from "@seo/db";
 
@@ -22,8 +23,14 @@ export async function GET(request: Request): Promise<Response> {
 
   const url = new URL(request.url);
   const clientId = url.searchParams.get("clientId");
-  if (!clientId) {
-    return Response.json({ error: "clientId is required" }, { status: 400 });
+
+  // Postgres raises on a malformed uuid, which would surface as a 500 for what
+  // is really a bad request.
+  if (!clientId || !z.string().uuid().safeParse(clientId).success) {
+    return Response.json(
+      { error: "clientId must be a uuid" },
+      { status: 400 },
+    );
   }
 
   const types = url.searchParams.get("types")?.split(",").filter(Boolean);

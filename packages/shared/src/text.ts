@@ -37,7 +37,9 @@ export function truncate(input: string, maxLength: number): string {
   if (input.length <= maxLength) return input;
   const cut = input.slice(0, maxLength - 1);
   const lastSpace = cut.lastIndexOf(" ");
-  return `${(lastSpace > maxLength * 0.6 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`;
+  // Fall back to a hard cut only when the boundary is so early that keeping
+  // it would throw away most of the budget.
+  return `${(lastSpace > maxLength * 0.5 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`;
 }
 
 /**
