@@ -45,6 +45,7 @@ import {
   MCP_SERVER_NAME,
   MCP_URL,
 } from "../apps/worker/src/providers/magnific-mcp.js";
+import { renderEnvFiles } from "./setup.js";
 
 const db = getDb;
 
@@ -370,6 +371,66 @@ async function pureTests(): Promise<void> {
       MCP_ADD_COMMAND,
       `claude mcp add --transport http ${MCP_SERVER_NAME} ${MCP_URL}`,
     );
+  });
+
+  section("Setup");
+
+  await test("both env files receive the same WORKER_SECRET", () => {
+    // A mismatch here surfaces much later as an opaque 401 when the worker
+    // tries to claim a job, so it is the one thing worth asserting.
+    const { web, worker } = renderEnvFiles({
+      databaseUrl: "postgres://u:p@host/db",
+      claudeToken: "sk-ant-oat01-x",
+      blobToken: "vercel_blob_rw_x",
+      searchAtlasKey: "sa-x",
+      appUrl: "http://localhost:3000",
+    });
+
+    const read = (text: string, key: string): string | undefined =>
+      new RegExp(`^${key}="([^"]*)"`, "m").exec(text)?.[1];
+
+    const webSecret = read(web, "WORKER_SECRET");
+    assert.ok(webSecret, "web file has no WORKER_SECRET");
+    assert.equal(read(worker, "WORKER_SECRET"), webSecret);
+    assert.ok(webSecret.length >= 32, "secret is too short to be worth having");
+  });
+
+  await test("the other generated secrets are all distinct", () => {
+    const { web } = renderEnvFiles({
+      databaseUrl: "postgres://u:p@host/db",
+      claudeToken: "",
+      blobToken: "",
+      searchAtlasKey: "",
+      appUrl: "http://localhost:3000",
+    });
+
+    const secrets = ["WORKER_SECRET", "CRON_SECRET", "AUTH_SECRET"].map(
+      (key) => new RegExp(`^${key}="([^"]*)"`, "m").exec(web)?.[1],
+    );
+    assert.ok(secrets.every(Boolean), "a secret is missing");
+    assert.equal(new Set(secrets).size, 3, "secrets were reused");
+  });
+
+  await test("answers land in the file that needs them", () => {
+    const { web, worker } = renderEnvFiles({
+      databaseUrl: "postgres://u:p@host/db",
+      claudeToken: "sk-ant-oat01-token",
+      blobToken: "vercel_blob_rw_token",
+      searchAtlasKey: "sa-key",
+      appUrl: "https://example.vercel.app",
+    });
+
+    // The Claude subscription token must never reach the app's environment.
+    assert.ok(worker.includes("sk-ant-oat01-token"));
+    assert.ok(!web.includes("sk-ant-oat01-token"));
+
+    // Blob writes happen app-side, so the token belongs there only.
+    assert.ok(web.includes("vercel_blob_rw_token"));
+    assert.ok(!worker.includes("vercel_blob_rw_token"));
+
+    assert.ok(worker.includes('APP_URL="https://example.vercel.app"'));
+    assert.ok(web.includes("postgres://u:p@host/db"));
+    assert.ok(worker.includes("postgres://u:p@host/db"));
   });
 
   section("Rendering");

@@ -156,7 +156,23 @@ Follow the browser flow and copy the token it prints (it starts `sk-ant-oat01-`)
 
 ## 6. Configuration
 
-Two files. Neither is committed — both are in `.gitignore`.
+Two files, neither committed. The quickest way is to let the setup script write
+both:
+
+```powershell
+pnpm setup
+```
+
+It asks for the values you collected above, generates the random secrets, and —
+importantly — writes the *same* `WORKER_SECRET` into both files. That pairing is
+how the worker proves it may claim jobs, and getting it wrong by hand surfaces
+much later as an unexplained 401. Press Enter to skip anything you do not have
+yet; it lists what is still missing at the end.
+
+Then skip to step 7.
+
+<details>
+<summary>Writing the files by hand instead</summary>
 
 ### `apps\web\.env.local`
 
@@ -202,6 +218,8 @@ MAGNIFIC_TRANSPORT="mcp"
 
 `WORKER_SECRET` must be **identical** in both files — it is how the worker
 proves to the app that it is allowed to claim jobs.
+
+</details>
 
 ---
 
