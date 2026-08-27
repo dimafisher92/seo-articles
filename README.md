@@ -57,6 +57,11 @@ already holds the connection.
 
 ## Setup
 
+**Starting from nothing?** [`docs/QUICKSTART.md`](docs/QUICKSTART.md) walks
+through it step by step on Windows — installing Node, cloning, the database,
+and running the app and worker locally before deploying anything. The section
+below assumes you already have the stack and want the short version.
+
 ### 1. Database
 
 Any Postgres works — Neon, Supabase, or a local container. Use the **pooled**
