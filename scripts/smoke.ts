@@ -46,6 +46,7 @@ import {
   MODELS,
   resolveModel,
 } from "../apps/worker/src/providers/magnific.js";
+import { parseEndpoint } from "../apps/worker/src/providers/endpoint.js";
 // The shipping implementations, not copies: the claim query and the reaper are
 // the two places where a subtle change would pass typecheck and still lose or
 // duplicate work, so the test has to exercise the real ones.
@@ -563,6 +564,48 @@ async function pureTests(): Promise<void> {
     });
     const types = blocks.map((b) => (b as { "@type": string })["@type"]);
     assert.deepEqual(types, ["BlogPosting"]);
+  });
+
+  console.log("\nSearchAtlas endpoints");
+
+  const base = { url: "https://api.searchatlas.com/fallback", method: "POST" } as const;
+
+  await test("a bare path hangs off the default host", () => {
+    const parsed = parseEndpoint("/api/v2/keywords/overview", base);
+    assert.equal(parsed.url, "https://api.searchatlas.com/api/v2/keywords/overview");
+    assert.equal(parsed.method, "POST", "method should fall back");
+  });
+
+  await test("a full URL moves the endpoint to another host", () => {
+    // The whole point: SearchAtlas splits services across hosts, so an endpoint
+    // must be able to leave the default one entirely.
+    const parsed = parseEndpoint(
+      "https://keyword.searchatlas.com/api/v2/keywords/overview",
+      base,
+    );
+    assert.equal(parsed.url, "https://keyword.searchatlas.com/api/v2/keywords/overview");
+  });
+
+  await test("a leading verb sets the method", () => {
+    const parsed = parseEndpoint(
+      "GET https://keyword.searchatlas.com/api/v2/x",
+      base,
+    );
+    assert.equal(parsed.method, "GET");
+    assert.equal(parsed.url, "https://keyword.searchatlas.com/api/v2/x");
+    // Lower case and extra spacing are what a hand-edited .env actually holds.
+    assert.equal(parseEndpoint("  get   /api/v2/x  ", base).method, "GET");
+  });
+
+  await test("a path without a leading slash still resolves", () => {
+    assert.equal(
+      parseEndpoint("api/v2/x", base).url,
+      "https://api.searchatlas.com/api/v2/x",
+    );
+  });
+
+  await test("an empty override falls back rather than breaking the URL", () => {
+    assert.deepEqual(parseEndpoint("   ", base), base);
   });
 
   console.log("\nConnection strings");

@@ -9,6 +9,7 @@ import type {
 import { normaliseDomain } from "@seo/shared";
 
 import { config } from "../config.js";
+import { parseEndpoint, type Endpoint } from "./endpoint.js";
 import { log } from "../log.js";
 
 /**
@@ -18,28 +19,56 @@ import { log } from "../log.js";
  * The model is never asked to estimate them — a plausible invented number is
  * worse than a blank cell, because a strategist will act on it.
  *
- * ## Verifying the endpoint paths
+ * ## Endpoints
  *
- * Authentication (`X-API-Key`, issued from Dashboard → API Settings) is
- * confirmed, and SearchAtlas documents per-service base URLs. The exact paths
- * and response field names below were not readable from the build environment,
- * so they are declared in ENDPOINTS and PATHS as a single block to correct
- * against https://docs.searchatlas.com once the key is in hand. Every override
- * is also available as an environment variable, so a correction needs no
- * redeploy of the worker.
+ * Authentication (`X-API-Key`, from Dashboard → API Settings) is confirmed.
+ * The endpoints are not: `docs.searchatlas.com` is unreachable from the build
+ * environment, and a probe run against the live API from a machine that can
+ * reach it found none of the originally guessed paths.
+ *
+ * Two things that search did establish, and that the shape below exists for:
+ *
+ * 1. **Each service has its own base URL.** The one confirmed example is
+ *    `https://keyword.searchatlas.com/api/v2/rank-tracker/…`, not a path under
+ *    a shared `api.searchatlas.com`. So an endpoint carries a whole URL, not a
+ *    path bolted onto one global host.
+ * 2. **The verb is not uniform.** Rank-tracker endpoints are GET and PUT; the
+ *    original adapter posted to everything.
+ *
+ * Hence `ENDPOINTS`: url plus method per capability, every one overridable
+ * from the environment so a correction needs no code change. Run
+ * `pnpm searchatlas:probe` — it reads the published documentation from a
+ * machine that can see it and prints the exact lines to paste.
  *
  * `mapMetrics` and friends accept several plausible field spellings for the
  * same value, so a naming difference degrades to a null rather than a crash.
  */
 
-const PATHS = {
-  metrics:
-    process.env.SEARCHATLAS_PATH_METRICS ?? "/v2/keywords/overview",
-  related:
-    process.env.SEARCHATLAS_PATH_RELATED ?? "/v2/keywords/related",
-  rankedKeywords:
-    process.env.SEARCHATLAS_PATH_RANKED ?? "/v2/domains/ranked-keywords",
-  serp: process.env.SEARCHATLAS_PATH_SERP ?? "/v2/serp",
+function endpoint(
+  variable: string,
+  path: string,
+  method: "GET" | "POST" = "POST",
+): Endpoint {
+  const fallback: Endpoint = {
+    url: `${config.searchAtlas.baseUrl.replace(/\/+$/, "")}${path}`,
+    method,
+  };
+  const override = process.env[variable];
+  return override ? parseEndpoint(override, fallback) : fallback;
+}
+
+/**
+ * Unverified defaults, kept only so a misconfigured worker fails with a 404
+ * naming the capability rather than with `undefined`. The probe replaces them.
+ */
+export const ENDPOINTS = {
+  metrics: endpoint("SEARCHATLAS_PATH_METRICS", "/api/v2/keywords/overview"),
+  related: endpoint("SEARCHATLAS_PATH_RELATED", "/api/v2/keywords/related"),
+  rankedKeywords: endpoint(
+    "SEARCHATLAS_PATH_RANKED",
+    "/api/v2/site-explorer/ranked-keywords",
+  ),
+  serp: endpoint("SEARCHATLAS_PATH_SERP", "/api/v2/serp"),
 } as const;
 
 type Json = Record<string, unknown>;
@@ -86,31 +115,53 @@ function rows(payload: unknown): Json[] {
 export class SearchAtlasProvider implements KeywordProvider {
   readonly name = "searchatlas";
 
-  constructor(
-    private readonly apiKey: string,
-    private readonly baseUrl: string = config.searchAtlas.baseUrl,
-  ) {}
+  // No base URL: each endpoint carries its own, because SearchAtlas splits its
+  // services across hosts.
+  constructor(private readonly apiKey: string) {}
 
-  private async request(path: string, body: Json): Promise<unknown> {
-    const url = `${this.baseUrl.replace(/\/+$/, "")}${path}`;
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "X-API-Key": this.apiKey,
-      },
-      body: JSON.stringify(body),
+  /**
+   * One request against a capability's endpoint.
+   *
+   * GET puts the parameters in the query string and POST in a JSON body — the
+   * same payload either way, so callers do not care which verb an endpoint
+   * turned out to want. Array values are repeated as `key=a&key=b`, the form
+   * every framework SearchAtlas might be using parses back into a list.
+   */
+  private async request(endpoint: Endpoint, payload: Json): Promise<unknown> {
+    let url = endpoint.url;
+    const init: RequestInit = {
+      method: endpoint.method,
+      headers: { "X-API-Key": this.apiKey, accept: "application/json" },
       signal: AbortSignal.timeout(120_000),
-    });
+    };
+
+    if (endpoint.method === "GET") {
+      const params = new URLSearchParams();
+      for (const [key, value] of Object.entries(payload)) {
+        if (value === undefined || value === null) continue;
+        if (Array.isArray(value)) {
+          for (const item of value) params.append(key, String(item));
+        } else {
+          params.set(key, String(value));
+        }
+      }
+      const query = params.toString();
+      if (query) url += (url.includes("?") ? "&" : "?") + query;
+    } else {
+      init.headers = { ...init.headers, "content-type": "application/json" };
+      init.body = JSON.stringify(payload);
+    }
+
+    const response = await fetch(url, init);
 
     if (!response.ok) {
       const text = await response.text().catch(() => "");
       throw new Error(
-        `SearchAtlas ${path} → ${response.status} ${response.statusText}. ` +
-          `${text.slice(0, 400)}\n` +
-          `If this is a 404, the path is wrong for your plan — override it with ` +
-          `SEARCHATLAS_PATH_* and check https://docs.searchatlas.com.`,
+        `SearchAtlas ${endpoint.method} ${endpoint.url} → ${response.status} ` +
+          `${response.statusText}. ${text.slice(0, 400)}\n` +
+          `A 404 or 405 here means the endpoint is wrong: each SearchAtlas ` +
+          `service has its own host. Run \`pnpm searchatlas:probe\` — it reads ` +
+          `the documentation and prints the SEARCHATLAS_PATH_* lines to paste.`,
       );
     }
 
@@ -146,7 +197,7 @@ export class SearchAtlasProvider implements KeywordProvider {
 
     const out: KeywordMetrics[] = [];
     for (const chunk of chunks) {
-      const payload = await this.request(PATHS.metrics, {
+      const payload = await this.request(ENDPOINTS.metrics, {
         keywords: chunk,
         country: geo.country,
         location: geo.country,
@@ -173,7 +224,7 @@ export class SearchAtlasProvider implements KeywordProvider {
 
     for (const seed of seeds) {
       try {
-        const payload = await this.request(PATHS.related, {
+        const payload = await this.request(ENDPOINTS.related, {
           keyword: seed,
           keywords: [seed],
           country: geo.country,
@@ -207,7 +258,7 @@ export class SearchAtlasProvider implements KeywordProvider {
     geo: GeoOptions,
     limit = 1000,
   ): Promise<RankedKeyword[]> {
-    const payload = await this.request(PATHS.rankedKeywords, {
+    const payload = await this.request(ENDPOINTS.rankedKeywords, {
       domain: normaliseDomain(domain),
       target: normaliseDomain(domain),
       country: geo.country,
@@ -238,7 +289,7 @@ export class SearchAtlasProvider implements KeywordProvider {
   }
 
   async getSerp(keyword: string, geo: GeoOptions): Promise<SerpResult> {
-    const payload = await this.request(PATHS.serp, {
+    const payload = await this.request(ENDPOINTS.serp, {
       keyword,
       query: keyword,
       country: geo.country,
@@ -294,16 +345,18 @@ export class SearchAtlasProvider implements KeywordProvider {
 /**
  * Returns the provider, or null when no key is configured.
  *
- * A null provider means the keyword pipeline runs in research-only mode: it
- * still builds clusters and finds gaps from live SERPs, but leaves volume and
- * difficulty blank rather than guessing.
+ * A null provider is survivable but not cheap: keyword clustering, the content
+ * plan and article generation all still run, but volume and difficulty stay
+ * blank and the **content gap comes back empty** — `analyseGap` returns early
+ * without a provider, because a gap is by definition what competitors rank for,
+ * and nothing else here knows their rankings.
  */
 export function createKeywordProvider(): KeywordProvider | null {
   const apiKey = config.searchAtlas.apiKey;
   if (!apiKey) {
     log.warn(
       "SEARCHATLAS_API_KEY is not set — keyword runs will have no volume or " +
-        "difficulty data. Clusters and content gaps still work from live SERPs.",
+        "difficulty data, and no content gap. Clustering still works.",
     );
     return null;
   }
@@ -330,14 +383,27 @@ export function describeKeywordProvider(): string {
     related: "SEARCHATLAS_PATH_RELATED",
     rankedKeywords: "SEARCHATLAS_PATH_RANKED",
     serp: "SEARCHATLAS_PATH_SERP",
-  } as const satisfies Record<keyof typeof PATHS, string>;
+  } as const satisfies Record<keyof typeof ENDPOINTS, string>;
 
   const overridden = Object.entries(PATH_ENV_VARS)
     .filter(([, variable]) => process.env[variable])
     .map(([key]) => key);
 
-  const paths =
-    overridden.length > 0 ? ` · custom paths: ${overridden.join(", ")}` : "";
+  if (overridden.length === 0) {
+    // Worth saying plainly: the shipped endpoints are guesses that a live probe
+    // has already disproved once, so an unconfigured worker is not ready.
+    return (
+      `Keywords: SearchAtlas · ${config.searchAtlas.baseUrl} · ` +
+      "endpoints UNVERIFIED — run `pnpm searchatlas:probe`"
+    );
+  }
 
-  return `Keywords: SearchAtlas · ${config.searchAtlas.baseUrl}${paths}`;
+  const hosts = [
+    ...new Set(Object.values(ENDPOINTS).map((e) => new URL(e.url).host)),
+  ];
+
+  return (
+    `Keywords: SearchAtlas · ${hosts.join(", ")} · ` +
+    `configured: ${overridden.join(", ")}`
+  );
 }
