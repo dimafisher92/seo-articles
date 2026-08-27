@@ -411,7 +411,8 @@ async function pureTests(): Promise<void> {
     // A mismatch here surfaces much later as an opaque 401 when the worker
     // tries to claim a job, so it is the one thing worth asserting.
     const { web, worker } = renderEnvFiles({
-      databaseUrl: "postgres://u:p@host/db",
+      databaseUrl: "postgres://u:p@host-pooler/db",
+      databaseUrlUnpooled: "postgres://u:p@host/db",
       claudeToken: "sk-ant-oat01-x",
       blobToken: "vercel_blob_rw_x",
       searchAtlasKey: "sa-x",
@@ -430,7 +431,8 @@ async function pureTests(): Promise<void> {
 
   await test("the other generated secrets are all distinct", () => {
     const { web } = renderEnvFiles({
-      databaseUrl: "postgres://u:p@host/db",
+      databaseUrl: "postgres://u:p@host-pooler/db",
+      databaseUrlUnpooled: "postgres://u:p@host/db",
       claudeToken: "",
       blobToken: "",
       searchAtlasKey: "",
@@ -445,9 +447,46 @@ async function pureTests(): Promise<void> {
     assert.equal(new Set(secrets).size, 3, "secrets were reused");
   });
 
+  await test("migrations get the direct string, the runtime the pooled one", () => {
+    const { worker } = renderEnvFiles({
+      databaseUrl: "postgres://u:p@host-pooler/db",
+      databaseUrlUnpooled: "postgres://u:p@host/db",
+      claudeToken: "",
+      blobToken: "",
+      searchAtlasKey: "",
+      magnificKey: "",
+      appUrl: "http://localhost:3000",
+    });
+
+    const read = (key: string): string | undefined =>
+      new RegExp(`^${key}="([^"]*)"`, "m").exec(worker)?.[1];
+
+    // Schema tools need session state, which PgBouncer in transaction mode
+    // does not have; running them pooled fails without ever naming pooling.
+    assert.ok(read("DATABASE_URL")?.includes("-pooler"));
+    assert.ok(!read("DATABASE_URL_UNPOOLED")?.includes("-pooler"));
+  });
+
+  await test("the direct string falls back to the pooled one when absent", () => {
+    const { worker } = renderEnvFiles({
+      databaseUrl: "postgres://u:p@host-pooler/db",
+      databaseUrlUnpooled: "",
+      claudeToken: "",
+      blobToken: "",
+      searchAtlasKey: "",
+      magnificKey: "",
+      appUrl: "http://localhost:3000",
+    });
+    // Better a warning at migration time than an empty connection string.
+    assert.ok(
+      /^DATABASE_URL_UNPOOLED="postgres:\/\/u:p@host-pooler\/db"$/m.test(worker),
+    );
+  });
+
   await test("answers land in the file that needs them", () => {
     const { web, worker } = renderEnvFiles({
-      databaseUrl: "postgres://u:p@host/db",
+      databaseUrl: "postgres://u:p@host-pooler/db",
+      databaseUrlUnpooled: "postgres://u:p@host/db",
       claudeToken: "sk-ant-oat01-token",
       blobToken: "vercel_blob_rw_token",
       searchAtlasKey: "sa-key",
@@ -468,8 +507,10 @@ async function pureTests(): Promise<void> {
     assert.ok(!web.includes("MS-magnific-key"));
 
     assert.ok(worker.includes('APP_URL="https://example.vercel.app"'));
-    assert.ok(web.includes("postgres://u:p@host/db"));
-    assert.ok(worker.includes("postgres://u:p@host/db"));
+    // Both get the pooled string for runtime use; only the worker also gets
+    // the direct one, because only it runs migrations.
+    assert.ok(web.includes("postgres://u:p@host-pooler/db"));
+    assert.ok(worker.includes("postgres://u:p@host-pooler/db"));
   });
 
   section("Rendering");

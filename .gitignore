@@ -16,5 +16,7 @@ npm-debug.log*
 pnpm-debug.log*
 
 .vercel
+# Written by `neon link`; holds org/project/branch ids for this checkout.
+.neon
 coverage/
 /tmp/

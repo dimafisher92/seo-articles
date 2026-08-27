@@ -69,8 +69,13 @@ connection string on serverless providers.
 
 ```bash
 pnpm install
-DATABASE_URL="postgres://…" pnpm db:push
+DATABASE_URL_UNPOOLED="postgres://…" pnpm db:push
 ```
+
+Migrations use the **direct** connection; the app and worker use the **pooled**
+one (`DATABASE_URL`). Schema tools need session state, which PgBouncer in
+transaction mode does not have, and running them pooled fails without ever
+naming pooling as the cause. `neon env pull` writes both strings.
 
 ### 2. Vercel
 

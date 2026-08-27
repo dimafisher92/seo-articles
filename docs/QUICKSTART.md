@@ -146,14 +146,32 @@ The free tier's 0.5 GB is ample: only text and metadata live here, images are in
 Blob. The database also scales to zero when idle, so the first query after a
 pause takes a second or two — that is normal, not a fault.
 
+You also want the **direct** string — the same URL *without* `-pooler`. Schema
+migrations cannot run over PgBouncer, and when they try they fail in ways that
+never mention pooling (`prepared statement "s0" already exists`, a `SET` that
+does not survive its own transaction). `pnpm setup` asks for both.
+
 Create the tables:
 
 ```powershell
-$env:DATABASE_URL="<paste the connection string>"
+$env:DATABASE_URL_UNPOOLED="<the string without -pooler>"
 pnpm db:push
 ```
 
 You should see a list of `CREATE TABLE` statements ending in `[✓] Changes applied`.
+
+### Or let the Neon CLI do it
+
+If you would rather not copy strings by hand, the CLI writes both for you:
+
+```powershell
+npx neon@latest init --agent
+npx neon@latest link      # pick org Dmitriy, project seo-articles
+npx neon@latest env pull  # writes DATABASE_URL and DATABASE_URL_UNPOOLED
+```
+
+`link` stores the ids in a git-ignored `.neon` file, so later commands need no
+`--project-id`.
 
 ## 4. Image storage
 

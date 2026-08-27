@@ -24,6 +24,8 @@ const WORKER_ENV = join(root, "apps", "worker", ".env");
 
 export type SetupAnswers = {
   databaseUrl: string;
+  /** Direct connection, used only by schema migrations. */
+  databaseUrlUnpooled: string;
   claudeToken: string;
   blobToken: string;
   searchAtlasKey: string;
@@ -71,6 +73,9 @@ APP_URL="${answers.appUrl}"
 # worker proves it may claim jobs.
 WORKER_SECRET="${workerSecret}"
 DATABASE_URL="${answers.databaseUrl}"
+# Direct connection. Used only by \`pnpm db:push\` — migrations cannot run over
+# the pooler. Everything at runtime uses the pooled DATABASE_URL above.
+DATABASE_URL_UNPOOLED="${answers.databaseUrlUnpooled || answers.databaseUrl}"
 
 CLAUDE_CODE_OAUTH_TOKEN="${answers.claudeToken}"
 CLAUDE_MODEL="claude-opus-5"
@@ -165,6 +170,13 @@ async function main(): Promise<void> {
         note:
           "Postgres connection string. On Neon or Supabase use the POOLED one —\n" +
           "  its hostname contains '-pooler'.",
+      }),
+      databaseUrlUnpooled: await ask(rl, "DATABASE_URL_UNPOOLED", {
+        note:
+          "The same database WITHOUT `-pooler` in the hostname. Schema\n" +
+          "  migrations cannot run over the pooler and fail confusingly if they\n" +
+          "  try. `neon env pull` writes this for you; press Enter to reuse the\n" +
+          "  pooled string and risk it.",
       }),
       claudeToken: await ask(rl, "CLAUDE_CODE_OAUTH_TOKEN", {
         note:
