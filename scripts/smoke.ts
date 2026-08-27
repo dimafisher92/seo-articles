@@ -710,6 +710,38 @@ async function pureTests(): Promise<void> {
         // Stands in for a response this code cannot read: the request
         // succeeded, so nothing throws, and yet no row comes out of it.
         if (asked.includes("unreadable")) return reply(json({ status: "ok" }));
+
+        if (asked.includes("mixed")) {
+          // Has `columns`, but the rows are already objects. The columnar path
+          // must decline this rather than index into them positionally.
+          return reply(
+            json({
+              columns: ["keyword", "search_volume"],
+              rows: [{ keyword: "already an object", search_volume: 77 }],
+            }),
+          );
+        }
+
+        if (asked.includes("columnar")) {
+          // Copied from a live response. The parallel-array shape is the one
+          // that silently produced empty columns for several runs.
+          return reply(
+            json({
+              id: 4929413,
+              name: "Untitled",
+              columns: [
+                "keyword",
+                "search_volume",
+                "keyword_difficulty",
+                "cost_per_click",
+                "ppc_difficulty",
+              ],
+              rows: [["abogado de accidentes houston", 30, 6, 238.06, 84]],
+              keyword_count: 1,
+            }),
+          );
+        }
+
         return reply(
           json({
             project: {
@@ -803,6 +835,25 @@ async function pureTests(): Promise<void> {
         gap[0]?.competitors.map((c) => c.domain).sort(),
         ["rival-a.com", "rival-b.com"],
       );
+    });
+
+    await test("a columnar table is zipped into rows", async () => {
+      const metrics = await provider.getMetrics(["columnar"], geo);
+      assert.equal(metrics.length, 1);
+      assert.equal(metrics[0]?.keyword, "abogado de accidentes houston");
+      assert.equal(metrics[0]?.volume, 30);
+      assert.equal(metrics[0]?.difficulty, 6);
+      assert.equal(metrics[0]?.cpc, 238.06);
+    });
+
+    await test("rows of objects are not mistaken for a columnar table", async () => {
+      // `rows` is also the key a normal list arrives under, so the columnar
+      // path must decline it when the entries are already objects — zipping
+      // them would index into an object by position and yield nothing.
+      const metrics = await provider.getMetrics(["mixed"], geo);
+      assert.equal(metrics.length, 1);
+      assert.equal(metrics[0]?.keyword, "already an object");
+      assert.equal(metrics[0]?.volume, 77);
     });
 
     await test("no metrics at all is an error, not a table of zeros", async () => {

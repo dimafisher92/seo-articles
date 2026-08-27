@@ -103,6 +103,37 @@ function pick(row: Json, ...keys: string[]): unknown {
 }
 
 /**
+ * Turns a columnar table into row objects.
+ *
+ * SearchAtlas returns tables as parallel arrays — the header once, then each
+ * row as a positional list:
+ *
+ *   { columns: ["keyword", "search_volume"], rows: [["abogado …", 30]] }
+ *
+ * Without this the row arrays reach the field mapping intact, every lookup for
+ * a named field misses, and the run completes with an empty column rather than
+ * an error. That is exactly how a working integration spent several runs
+ * looking like a provider with no data.
+ */
+function zipColumns(obj: Json): Json[] | null {
+  const columns = obj.columns;
+  const table = obj.rows ?? obj.data;
+
+  if (!Array.isArray(columns) || !Array.isArray(table)) return null;
+  if (!columns.every((column) => typeof column === "string")) return null;
+  // A `rows` of objects is already the shape we want; leave it alone.
+  if (!table.every((row) => Array.isArray(row))) return null;
+
+  return (table as unknown[][]).map((row) => {
+    const mapped: Json = {};
+    columns.forEach((column, index) => {
+      mapped[column as string] = row[index];
+    });
+    return mapped;
+  });
+}
+
+/**
  * Finds the result array wherever the response wraps it.
  *
  * Recursive because these payloads nest — `{ results: { keywords: [...] } }` is
@@ -113,6 +144,12 @@ function rows(payload: unknown, depth = 0): Json[] {
   if (depth > 4 || !payload || typeof payload !== "object") return [];
 
   const obj = payload as Json;
+
+  // Before the key search: a columnar table also has a `rows` key, and taking
+  // it directly would hand back arrays where objects are expected.
+  const zipped = zipColumns(obj);
+  if (zipped) return zipped;
+
   for (const key of [
     "data",
     "results",
