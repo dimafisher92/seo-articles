@@ -309,3 +309,35 @@ export function createKeywordProvider(): KeywordProvider | null {
   }
   return new SearchAtlasProvider(apiKey);
 }
+
+/**
+ * One line for the startup banner, matching the image provider's.
+ *
+ * Without it a missing key is invisible until a keyword run comes back with
+ * blank volume columns, which reads as a broken provider rather than an absent
+ * one. Overridden paths are named too: they are the setting most likely to be
+ * wrong, and the least likely to be remembered.
+ */
+export function describeKeywordProvider(): string {
+  if (!config.searchAtlas.apiKey) {
+    return "Keywords: none configured — clusters and gaps only, no volume data";
+  }
+
+  // Spelled out rather than derived: the variable for `rankedKeywords` is
+  // SEARCHATLAS_PATH_RANKED, so uppercasing the key would silently never match.
+  const PATH_ENV_VARS = {
+    metrics: "SEARCHATLAS_PATH_METRICS",
+    related: "SEARCHATLAS_PATH_RELATED",
+    rankedKeywords: "SEARCHATLAS_PATH_RANKED",
+    serp: "SEARCHATLAS_PATH_SERP",
+  } as const satisfies Record<keyof typeof PATHS, string>;
+
+  const overridden = Object.entries(PATH_ENV_VARS)
+    .filter(([, variable]) => process.env[variable])
+    .map(([key]) => key);
+
+  const paths =
+    overridden.length > 0 ? ` · custom paths: ${overridden.join(", ")}` : "";
+
+  return `Keywords: SearchAtlas · ${config.searchAtlas.baseUrl}${paths}`;
+}

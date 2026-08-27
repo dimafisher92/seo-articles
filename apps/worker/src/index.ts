@@ -14,6 +14,7 @@ import { runCrawlSite } from "./pipelines/crawl-site.js";
 import { runKeywordResearch } from "./pipelines/keyword-research.js";
 import { runRegenerateImage } from "./pipelines/regenerate-image.js";
 import { describeImageProvider } from "./providers/images.js";
+import { describeKeywordProvider } from "./providers/searchatlas.js";
 import { runWriteArticle } from "./pipelines/write-article.js";
 import type { StageReporter } from "./pipelines/types.js";
 
@@ -153,6 +154,7 @@ async function main(): Promise<void> {
       `model ${config.claude.model}`,
   );
 
+  log.info(describeKeywordProvider());
   log.info(describeImageProvider());
 
   let idleLogged = false;
