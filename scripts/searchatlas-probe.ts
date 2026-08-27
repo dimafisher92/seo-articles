@@ -23,7 +23,7 @@
  *   pnpm searchatlas:probe
  *   pnpm searchatlas:probe --grep backlink
  *   pnpm searchatlas:probe --show se_lookup_keyword,se_analyze_domain
- *   pnpm searchatlas:probe --call se_x --args '{"domain":"nike.com"}'
+ *   pnpm searchatlas:probe --call se_x --set domain=nike.com
  */
 
 import { writeFileSync } from "node:fs";
@@ -52,19 +52,31 @@ const args = process.argv.slice(2);
  * nothing pointing at the shell. Everything up to the next `--flag` is joined
  * back together instead.
  */
-const flag = (name: string): string | undefined => {
-  const index = args.indexOf(`--${name}`);
-  if (index < 0) return undefined;
-
+function valueAt(index: number): string | undefined {
   const parts: string[] = [];
   for (let i = index + 1; i < args.length; i++) {
     const token = args[i]!;
     if (token.startsWith("--")) break;
     parts.push(token);
   }
-
   return parts.length > 0 ? parts.join(" ") : undefined;
+}
+
+const flag = (name: string): string | undefined => {
+  const index = args.indexOf(`--${name}`);
+  return index < 0 ? undefined : valueAt(index);
 };
+
+/** Every occurrence of a repeatable flag, in order. */
+function flagAll(name: string): string[] {
+  const found: string[] = [];
+  args.forEach((token, index) => {
+    if (token !== `--${name}`) return;
+    const value = valueAt(index);
+    if (value !== undefined) found.push(value);
+  });
+  return found;
+}
 
 const MCP_URL =
   process.env.SEARCHATLAS_MCP_URL ?? "https://mcp.searchatlas.com/mcp";
@@ -200,6 +212,58 @@ function detail(tool: McpTool): void {
   }
 }
 
+/**
+ * Builds tool arguments from repeated `--set key=value` flags.
+ *
+ * Not JSON, because JSON does not survive the trip: PowerShell splits a quoted
+ * argument on spaces and then strips its double quotes before a native command
+ * ever sees it, so `--args '{"a":"b c"}'` arrives as `{a:[b c]}` — unparseable,
+ * through no fault of the person who typed it correctly. `--set` needs no
+ * quoting at all.
+ *
+ * Types come from the tool's own inputSchema rather than from guessing at the
+ * string: the catalogue already says which parameters are arrays, numbers and
+ * booleans, so `wait=true` and `keywords=two words` land as the right shape
+ * without the caller having to think about it.
+ */
+function buildArgs(tool: McpTool | undefined, pairs: string[]): Record<string, unknown> {
+  const schema = tool?.inputSchema as JsonSchema | undefined;
+  const properties = schema?.properties ?? {};
+  const out: Record<string, unknown> = {};
+
+  for (const pair of pairs) {
+    const split = pair.indexOf("=");
+    if (split < 0) {
+      bad(`--set needs key=value, got "${pair}"`);
+      continue;
+    }
+
+    const key = pair.slice(0, split).trim();
+    const raw = pair.slice(split + 1).trim();
+    const type = typeOf(properties[key]);
+
+    if (type.startsWith("array")) {
+      // Commas separate list items; a value with none is a single-item list.
+      out[key] = raw.includes(",")
+        ? raw.split(",").map((item) => item.trim()).filter(Boolean)
+        : [raw];
+    } else if (type.startsWith("boolean")) {
+      out[key] = raw === "true" || raw === "1" || raw === "yes";
+    } else if (type.startsWith("integer") || type.startsWith("number")) {
+      const parsed = Number(raw);
+      out[key] = Number.isFinite(parsed) ? parsed : raw;
+    } else {
+      out[key] = raw;
+    }
+
+    if (!properties[key]) {
+      info(`note: "${key}" is not in ${tool?.name ?? "the tool"}'s schema`);
+    }
+  }
+
+  return out;
+}
+
 async function main(): Promise<void> {
   console.log("\nSearchAtlas catalogue\n");
 
@@ -333,17 +397,29 @@ async function main(): Promise<void> {
   const toolName = flag("call");
   if (toolName) {
     console.log(`\n3. Calling ${toolName}\n`);
-    const raw = flag("args") ?? "{}";
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = JSON.parse(raw) as Record<string, unknown>;
-    } catch (error) {
-      bad(`--args is not valid JSON: ${(error as Error).message}`);
-      info(`received: ${raw}`);
-      info("In PowerShell wrap it in single quotes and do not escape the");
-      info(`double quotes:  --args '{"domain":"nike.com"}'`);
-      return;
+    const sets = flagAll("set");
+    const rawJson = flag("args");
+
+    let parsed: Record<string, unknown> = {};
+    if (sets.length > 0) {
+      parsed = buildArgs(
+        tools.find((t) => t.name === toolName),
+        sets,
+      );
+    } else if (rawJson) {
+      try {
+        parsed = JSON.parse(rawJson) as Record<string, unknown>;
+      } catch (error) {
+        bad(`--args is not valid JSON: ${(error as Error).message}`);
+        info(`received: ${rawJson}`);
+        info("PowerShell strips the quotes out of JSON before the script sees");
+        info("it. Use --set instead, which needs no quoting:");
+        info(`  --set keywords=abogado de accidentes --set country_code=US`);
+        return;
+      }
     }
+
+    console.log(`  arguments: ${JSON.stringify(parsed)}\n`);
 
     try {
       const result = await client.callTool(toolName, parsed);
@@ -364,7 +440,7 @@ async function main(): Promise<void> {
   To look around yourself:
     pnpm searchatlas:probe --grep backlink
     pnpm searchatlas:probe --show <name>,<name>
-    pnpm searchatlas:probe --call <name> --args '{"domain":"nike.com"}'
+    pnpm searchatlas:probe --call <name> --set domain=nike.com
   ────────────────────────────────────────────────────────────
 `);
 }
