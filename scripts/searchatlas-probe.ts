@@ -41,9 +41,29 @@ import {
 loadEnv({ path: "apps/worker/.env" });
 
 const args = process.argv.slice(2);
+
+/**
+ * Reads a flag's value, rejoining a value the shell split apart.
+ *
+ * PowerShell breaks a quoted argument containing spaces into several before it
+ * reaches here, so `--args '{"keywords":["two words"]}'` arrives as four
+ * separate tokens and taking only the next one yields a truncated fragment —
+ * which surfaces as an unterminated-JSON error naming a column number, with
+ * nothing pointing at the shell. Everything up to the next `--flag` is joined
+ * back together instead.
+ */
 const flag = (name: string): string | undefined => {
   const index = args.indexOf(`--${name}`);
-  return index >= 0 ? args[index + 1] : undefined;
+  if (index < 0) return undefined;
+
+  const parts: string[] = [];
+  for (let i = index + 1; i < args.length; i++) {
+    const token = args[i]!;
+    if (token.startsWith("--")) break;
+    parts.push(token);
+  }
+
+  return parts.length > 0 ? parts.join(" ") : undefined;
 };
 
 const MCP_URL =
@@ -313,11 +333,20 @@ async function main(): Promise<void> {
   const toolName = flag("call");
   if (toolName) {
     console.log(`\n3. Calling ${toolName}\n`);
+    const raw = flag("args") ?? "{}";
+    let parsed: Record<string, unknown>;
     try {
-      const result = await client.callTool(
-        toolName,
-        JSON.parse(flag("args") ?? "{}") as Record<string, unknown>,
-      );
+      parsed = JSON.parse(raw) as Record<string, unknown>;
+    } catch (error) {
+      bad(`--args is not valid JSON: ${(error as Error).message}`);
+      info(`received: ${raw}`);
+      info("In PowerShell wrap it in single quotes and do not escape the");
+      info(`double quotes:  --args '{"domain":"nike.com"}'`);
+      return;
+    }
+
+    try {
+      const result = await client.callTool(toolName, parsed);
       console.log(JSON.stringify(unwrapToolResult(result), null, 2).slice(0, 4000));
     } catch (error) {
       bad(error instanceof Error ? error.message : String(error));
