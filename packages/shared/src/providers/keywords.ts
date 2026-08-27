@@ -76,6 +76,23 @@ export interface KeywordProvider {
 
   /** Top organic results for a keyword, plus PAA. Used for SERP intel. */
   getSerp(keyword: string, geo: GeoOptions): Promise<SerpResult>;
+
+  /**
+   * The gap, computed by the provider.
+   *
+   * Optional, because `computeContentGap` below can always derive it from
+   * ranked-keyword lists. But when a provider offers it natively the native
+   * one wins: deriving it means pulling every ranking for the client and for
+   * each competitor and diffing them here, which is a great many calls and a
+   * worse answer — the provider knows its own index, including the keywords
+   * that fell outside whatever page size we asked for.
+   */
+  getKeywordGap?(
+    clientDomain: string,
+    competitorDomains: string[],
+    geo: GeoOptions,
+    limit?: number,
+  ): Promise<ContentGapRow[]>;
 }
 
 /* ------------------------------------------------------------- gap logic */

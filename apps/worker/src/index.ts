@@ -14,7 +14,7 @@ import { runCrawlSite } from "./pipelines/crawl-site.js";
 import { runKeywordResearch } from "./pipelines/keyword-research.js";
 import { runRegenerateImage } from "./pipelines/regenerate-image.js";
 import { describeImageProvider } from "./providers/images.js";
-import { describeKeywordProvider } from "./providers/searchatlas.js";
+import { describeKeywordProvider } from "./providers/keywords.js";
 import { runWriteArticle } from "./pipelines/write-article.js";
 import type { StageReporter } from "./pipelines/types.js";
 

@@ -30,7 +30,14 @@ export const config = {
 
   searchAtlas: {
     apiKey: optional("SEARCHATLAS_API_KEY"),
-    baseUrl: optional("SEARCHATLAS_BASE_URL") ?? "https://api.searchatlas.com",
+    /** Only if the account issues a JWT; the API key is enough on its own. */
+    token: optional("SEARCHATLAS_TOKEN"),
+    /**
+     * SearchAtlas's whole programmatic surface is this one self-describing
+     * endpoint — there are no REST routes to configure. `pnpm searchatlas:probe`
+     * lists everything the account can call.
+     */
+    mcpUrl: optional("SEARCHATLAS_MCP_URL") ?? "https://mcp.searchatlas.com/mcp",
   },
 
   magnific: {

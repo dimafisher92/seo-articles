@@ -20,7 +20,7 @@ import { config } from "../config.js";
 import { runStageWithRetry } from "../claude.js";
 import { db, loadClient, toBrandContext } from "../data.js";
 import { log } from "../log.js";
-import { createKeywordProvider } from "../providers/searchatlas.js";
+import { createKeywordProvider } from "../providers/keywords.js";
 import {
   clusterSchema,
   seedKeywordsSchema,
@@ -266,6 +266,36 @@ async function analyseGap(params: {
   const { provider, clientDomain, competitorDomains, geo } = params;
   if (!provider || competitorDomains.length === 0) {
     return { gapRows: [], competitorsAnalysed: [] };
+  }
+
+  // Prefer the provider's own gap analysis. Deriving it below means pulling
+  // every ranking for the client and for each competitor and diffing them
+  // here — many more calls, and a worse answer, since the provider can see the
+  // keywords that fell outside whatever page size we asked for.
+  if (provider.getKeywordGap && clientDomain) {
+    try {
+      const gapRows = await provider.getKeywordGap(
+        clientDomain,
+        competitorDomains,
+        geo,
+      );
+      if (gapRows.length > 0) {
+        return {
+          gapRows,
+          competitorsAnalysed: [
+            ...new Set(
+              gapRows.flatMap((row) => row.competitors.map((c) => c.domain)),
+            ),
+          ],
+        };
+      }
+      // An empty result is not proof of no gap: a Site Explorer project that
+      // has not finished populating answers the same way. Fall through and
+      // derive it, which at least reports which competitors had data.
+      log.warn("Native gap analysis returned nothing; deriving it instead");
+    } catch (error) {
+      log.warn("Native gap analysis failed; deriving it instead", error);
+    }
   }
 
   const clientRanked: RankedKeyword[] = clientDomain

@@ -1,4 +1,5 @@
 import type {
+  ContentGapRow,
   GeoOptions,
   KeywordMetrics,
   KeywordProvider,
@@ -8,9 +9,8 @@ import type {
 } from "@seo/shared";
 import { normaliseDomain } from "@seo/shared";
 
-import { config } from "../config.js";
-import { parseEndpoint, type Endpoint } from "./endpoint.js";
 import { log } from "../log.js";
+import { McpHttpClient, unwrapToolResult } from "./mcp-http.js";
 
 /**
  * SearchAtlas implementation of the keyword provider.
@@ -19,64 +19,66 @@ import { log } from "../log.js";
  * The model is never asked to estimate them — a plausible invented number is
  * worse than a blank cell, because a strategist will act on it.
  *
- * ## Endpoints
+ * ## Why this talks to one endpoint and not to REST routes
  *
- * Authentication (`X-API-Key`, from Dashboard → API Settings) is confirmed.
- * The endpoints are not: `docs.searchatlas.com` is unreachable from the build
- * environment, and a probe run against the live API from a machine that can
- * reach it found none of the originally guessed paths.
+ * Two rounds of guessing REST paths found nothing, and SearchAtlas's own npm
+ * bridge explains why: it hard-codes no paths at all, because their whole
+ * programmatic surface is a single self-describing endpoint. The tool names
+ * below were read from that endpoint's own catalogue with `tools/list`, not
+ * inferred. `pnpm searchatlas:probe` prints it.
  *
- * Two things that search did establish, and that the shape below exists for:
+ * ## The one thing worth knowing about their model
  *
- * 1. **Each service has its own base URL.** The one confirmed example is
- *    `https://keyword.searchatlas.com/api/v2/rank-tracker/…`, not a path under
- *    a shared `api.searchatlas.com`. So an endpoint carries a whole URL, not a
- *    path bolted onto one global host.
- * 2. **The verb is not uniform.** Rank-tracker endpoints are GET and PUT; the
- *    original adapter posted to everything.
+ * Site Explorer is project-based: a domain is analysed by creating a project
+ * for it, which SearchAtlas populates over 24-48 hours. `se_analyze_domain`
+ * hides the create-or-resolve step, but not the wait — a domain SearchAtlas has
+ * never seen returns little or nothing on the first run, and fills in later.
+ * That is a property of their index, not a bug here, so it is surfaced as an
+ * empty result and a warning rather than an error.
  *
- * Hence `ENDPOINTS`: url plus method per capability, every one overridable
- * from the environment so a correction needs no code change. Run
- * `pnpm searchatlas:probe` — it reads the published documentation from a
- * machine that can see it and prints the exact lines to paste.
+ * ## Response shapes
  *
- * `mapMetrics` and friends accept several plausible field spellings for the
- * same value, so a naming difference degrades to a null rather than a crash.
+ * Read from the catalogue's schemas, but the *responses* were never seen from
+ * the environment this was written in. So `pick()` accepts several plausible
+ * spellings of each field and `rows()` finds the result array wherever it is
+ * wrapped: a naming difference degrades to a null in one column rather than
+ * taking down a research run.
  */
-
-function endpoint(
-  variable: string,
-  path: string,
-  method: "GET" | "POST" = "POST",
-): Endpoint {
-  const fallback: Endpoint = {
-    url: `${config.searchAtlas.baseUrl.replace(/\/+$/, "")}${path}`,
-    method,
-  };
-  const override = process.env[variable];
-  return override ? parseEndpoint(override, fallback) : fallback;
-}
-
-/**
- * Unverified defaults, kept only so a misconfigured worker fails with a 404
- * naming the capability rather than with `undefined`. The probe replaces them.
- */
-export const ENDPOINTS = {
-  metrics: endpoint("SEARCHATLAS_PATH_METRICS", "/api/v2/keywords/overview"),
-  related: endpoint("SEARCHATLAS_PATH_RELATED", "/api/v2/keywords/related"),
-  rankedKeywords: endpoint(
-    "SEARCHATLAS_PATH_RANKED",
-    "/api/v2/site-explorer/ranked-keywords",
-  ),
-  serp: endpoint("SEARCHATLAS_PATH_SERP", "/api/v2/serp"),
-} as const;
 
 type Json = Record<string, unknown>;
+
+/**
+ * Tool names, overridable without a code change.
+ *
+ * They came from the live catalogue so they are real, but SearchAtlas ships
+ * a new one of these every few weeks — `searchatlas-mcp 1.27.1` at the time of
+ * writing — and an env var is a cheaper correction than a release.
+ */
+export const TOOLS = {
+  /** Bulk volume/difficulty/CPC. Computes server-side; `wait` blocks for it. */
+  metrics: process.env.SEARCHATLAS_TOOL_METRICS ?? "se_research_keywords",
+  /** One keyword, and it returns related terms alongside the metrics. */
+  lookup: process.env.SEARCHATLAS_TOOL_LOOKUP ?? "se_lookup_keyword",
+  /** Resolves the Site Explorer project for a domain, then reads facets. */
+  domain: process.env.SEARCHATLAS_TOOL_DOMAIN ?? "se_analyze_domain",
+  /** The gap, natively: one primary against up to four competitors. */
+  gapAnalyze: process.env.SEARCHATLAS_TOOL_GAP ?? "se_keyword_gap_analyze",
+  gapResults:
+    process.env.SEARCHATLAS_TOOL_GAP_RESULTS ?? "se_get_keyword_gap_results",
+  /** Keyword-research projects; one of its modes is a SERP overview. */
+  serp:
+    process.env.SEARCHATLAS_TOOL_SERP ?? "se_keyword_research_projects",
+} as const;
+
+/** SearchAtlas takes at most four competitors per gap analysis. */
+const MAX_GAP_COMPETITORS = 4;
+
+/* ------------------------------------------------------------- extraction */
 
 function num(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string") {
-    const parsed = Number(value);
+    const parsed = Number(value.replace(/[,\s]/g, ""));
     return Number.isFinite(parsed) ? parsed : null;
   }
   return null;
@@ -86,7 +88,7 @@ function str(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-/** Reads the first present key — tolerates naming differences across endpoints. */
+/** Reads the first present key — tolerates naming differences across tools. */
 function pick(row: Json, ...keys: string[]): unknown {
   for (const key of keys) {
     if (row[key] !== undefined && row[key] !== null) return row[key];
@@ -94,92 +96,126 @@ function pick(row: Json, ...keys: string[]): unknown {
   return undefined;
 }
 
-/** Finds the result array wherever the response wraps it. */
-function rows(payload: unknown): Json[] {
+/**
+ * Finds the result array wherever the response wraps it.
+ *
+ * Recursive because these payloads nest — `{ results: { keywords: [...] } }` is
+ * as likely as a bare array, and which one it is varies per tool.
+ */
+function rows(payload: unknown, depth = 0): Json[] {
   if (Array.isArray(payload)) return payload as Json[];
-  if (payload && typeof payload === "object") {
-    const obj = payload as Json;
-    for (const key of ["data", "results", "items", "keywords", "tasks"]) {
-      const value = obj[key];
-      if (Array.isArray(value)) return value as Json[];
-      // One more level: { data: { results: [...] } }
-      if (value && typeof value === "object") {
-        const nested = rows(value);
-        if (nested.length > 0) return nested;
-      }
-    }
+  if (depth > 4 || !payload || typeof payload !== "object") return [];
+
+  const obj = payload as Json;
+  for (const key of [
+    "data",
+    "results",
+    "items",
+    "keywords",
+    "keyword_data",
+    "rows",
+    "organic",
+    "related_keywords",
+    "tasks",
+  ]) {
+    const value = obj[key];
+    if (Array.isArray(value)) return value as Json[];
+  }
+
+  for (const value of Object.values(obj)) {
+    const nested = rows(value, depth + 1);
+    if (nested.length > 0) return nested;
   }
   return [];
 }
 
-export class SearchAtlasProvider implements KeywordProvider {
-  readonly name = "searchatlas";
+/** Finds a scalar by key at any depth — for ids buried in a wrapper. */
+function findScalar(payload: unknown, keys: string[], depth = 0): unknown {
+  if (depth > 5 || !payload || typeof payload !== "object") return undefined;
 
-  // No base URL: each endpoint carries its own, because SearchAtlas splits its
-  // services across hosts.
-  constructor(private readonly apiKey: string) {}
-
-  /**
-   * One request against a capability's endpoint.
-   *
-   * GET puts the parameters in the query string and POST in a JSON body — the
-   * same payload either way, so callers do not care which verb an endpoint
-   * turned out to want. Array values are repeated as `key=a&key=b`, the form
-   * every framework SearchAtlas might be using parses back into a list.
-   */
-  private async request(endpoint: Endpoint, payload: Json): Promise<unknown> {
-    let url = endpoint.url;
-    const init: RequestInit = {
-      method: endpoint.method,
-      headers: { "X-API-Key": this.apiKey, accept: "application/json" },
-      signal: AbortSignal.timeout(120_000),
-    };
-
-    if (endpoint.method === "GET") {
-      const params = new URLSearchParams();
-      for (const [key, value] of Object.entries(payload)) {
-        if (value === undefined || value === null) continue;
-        if (Array.isArray(value)) {
-          for (const item of value) params.append(key, String(item));
-        } else {
-          params.set(key, String(value));
-        }
-      }
-      const query = params.toString();
-      if (query) url += (url.includes("?") ? "&" : "?") + query;
-    } else {
-      init.headers = { ...init.headers, "content-type": "application/json" };
-      init.body = JSON.stringify(payload);
+  if (Array.isArray(payload)) {
+    for (const item of payload) {
+      const found = findScalar(item, keys, depth + 1);
+      if (found !== undefined) return found;
     }
-
-    const response = await fetch(url, init);
-
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      throw new Error(
-        `SearchAtlas ${endpoint.method} ${endpoint.url} → ${response.status} ` +
-          `${response.statusText}. ${text.slice(0, 400)}\n` +
-          `A 404 or 405 here means the endpoint is wrong: each SearchAtlas ` +
-          `service has its own host. Run \`pnpm searchatlas:probe\` — it reads ` +
-          `the documentation and prints the SEARCHATLAS_PATH_* lines to paste.`,
-      );
-    }
-
-    return response.json();
+    return undefined;
   }
 
-  private mapMetrics(row: Json): KeywordMetrics {
-    const keyword = str(pick(row, "keyword", "term", "query", "keyword_text"));
+  const obj = payload as Json;
+  for (const key of keys) {
+    const value = obj[key];
+    if (typeof value === "string" || typeof value === "number") return value;
+  }
+  for (const value of Object.values(obj)) {
+    const found = findScalar(value, keys, depth + 1);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+function mapMetrics(row: Json): KeywordMetrics {
+  return {
+    keyword: str(pick(row, "keyword", "term", "query", "keyword_text")) ?? "",
+    volume: num(
+      pick(row, "volume", "search_volume", "searchVolume", "monthly_searches"),
+    ),
+    difficulty: num(
+      pick(
+        row,
+        "difficulty",
+        "keyword_difficulty",
+        "kd",
+        "keywordDifficulty",
+        "competition_index",
+      ),
+    ),
+    cpc: num(pick(row, "cpc", "cost_per_click", "costPerClick")),
+    intent: str(pick(row, "intent", "search_intent", "searchIntent")) ?? null,
+  };
+}
+
+function mapRanked(row: Json): RankedKeyword | null {
+  const keyword = str(pick(row, "keyword", "term", "query"));
+  const position = num(pick(row, "position", "rank", "pos", "current_position"));
+  if (!keyword || position === null) return null;
+
+  const title = str(pick(row, "title", "page_title"));
+  return {
+    keyword,
+    url: str(pick(row, "url", "page", "landing_page", "ranked_url")) ?? "",
+    position,
+    volume: num(pick(row, "volume", "search_volume", "searchVolume")),
+    difficulty: num(pick(row, "difficulty", "keyword_difficulty", "kd")),
+    ...(title !== undefined ? { title } : {}),
+  };
+}
+
+/* --------------------------------------------------------------- provider */
+
+export class SearchAtlasProvider implements KeywordProvider {
+  readonly name = "searchatlas";
+  private readonly client: McpHttpClient;
+
+  constructor(credential: { apiKey?: string; token?: string }, url: string) {
+    // Bearer first, matching SearchAtlas's own bridge; the API key is their
+    // documented alternative and the one this project asks for.
+    const headers: Record<string, string> = credential.token
+      ? { authorization: `Bearer ${credential.token}` }
+      : { "x-api-key": credential.apiKey! };
+
+    this.client = new McpHttpClient(url, headers, "seo-articles-worker");
+  }
+
+  private async call(tool: string, args: Json): Promise<unknown> {
+    const result = await this.client.callTool(tool, args);
+    return unwrapToolResult(result);
+  }
+
+  /** Their country parameter is an uppercase alpha-2. */
+  private geoArgs(geo: GeoOptions): Json {
     return {
-      keyword: keyword ?? "",
-      volume: num(
-        pick(row, "volume", "search_volume", "searchVolume", "monthly_searches"),
-      ),
-      difficulty: num(
-        pick(row, "difficulty", "keyword_difficulty", "kd", "keywordDifficulty"),
-      ),
-      cpc: num(pick(row, "cpc", "cost_per_click", "costPerClick")),
-      intent: str(pick(row, "intent", "search_intent", "searchIntent")) ?? null,
+      country_code: geo.country.toUpperCase(),
+      ...(geo.locale ? { language: geo.locale.split("-")[0] } : {}),
     };
   }
 
@@ -189,26 +225,33 @@ export class SearchAtlasProvider implements KeywordProvider {
   ): Promise<KeywordMetrics[]> {
     if (keywords.length === 0) return [];
 
-    // Chunked so one oversized request cannot fail the whole run.
-    const chunks: string[][] = [];
-    for (let i = 0; i < keywords.length; i += 200) {
-      chunks.push(keywords.slice(i, i + 200));
+    const out: KeywordMetrics[] = [];
+
+    // Chunked so one oversized request cannot fail the whole run, and because
+    // `wait` blocks server-side while these compute.
+    for (let i = 0; i < keywords.length; i += 100) {
+      const chunk = keywords.slice(i, i + 100);
+      try {
+        const payload = await this.call(TOOLS.metrics, {
+          keywords: chunk,
+          name: `seo-articles ${new Date().toISOString().slice(0, 10)}`,
+          wait: true,
+          ...this.geoArgs(geo),
+        });
+
+        out.push(
+          ...rows(payload)
+            .map(mapMetrics)
+            .filter((metric) => metric.keyword),
+        );
+      } catch (error) {
+        log.warn(
+          `SearchAtlas metrics failed for ${chunk.length} keywords`,
+          error,
+        );
+      }
     }
 
-    const out: KeywordMetrics[] = [];
-    for (const chunk of chunks) {
-      const payload = await this.request(ENDPOINTS.metrics, {
-        keywords: chunk,
-        country: geo.country,
-        location: geo.country,
-        language: geo.locale?.split("-")[0] ?? "en",
-      });
-      out.push(
-        ...rows(payload)
-          .map((row) => this.mapMetrics(row))
-          .filter((m) => m.keyword),
-      );
-    }
     return out;
   }
 
@@ -219,34 +262,39 @@ export class SearchAtlasProvider implements KeywordProvider {
   ): Promise<KeywordMetrics[]> {
     if (seeds.length === 0) return [];
 
-    const perSeed = Math.max(20, Math.ceil(limit / seeds.length));
     const collected = new Map<string, KeywordMetrics>();
 
     for (const seed of seeds) {
       try {
-        const payload = await this.request(ENDPOINTS.related, {
+        // One call gets the seed's own metrics and its related terms, so the
+        // seed is recorded too rather than needing a second lookup.
+        const payload = await this.call(TOOLS.lookup, {
           keyword: seed,
-          keywords: [seed],
-          country: geo.country,
-          location: geo.country,
-          language: geo.locale?.split("-")[0] ?? "en",
-          limit: perSeed,
+          ...this.geoArgs(geo),
         });
 
-        for (const row of rows(payload)) {
-          const metrics = this.mapMetrics(row);
+        const candidates = [
+          ...(payload && typeof payload === "object"
+            ? [payload as Json]
+            : []),
+          ...rows(payload),
+        ];
+
+        for (const row of candidates) {
+          const metrics = mapMetrics(row);
           if (!metrics.keyword) continue;
+
           const key = metrics.keyword.toLowerCase();
-          // Keep the richest record when a keyword surfaces under two seeds.
           const existing = collected.get(key);
+          // Keep the richest record when a keyword surfaces under two seeds.
           if (!existing || (existing.volume === null && metrics.volume !== null)) {
             collected.set(key, metrics);
           }
         }
       } catch (error) {
-        // One dead seed should not sink a research run that has already
-        // gathered hundreds of keywords from the others.
-        log.warn(`SearchAtlas related lookup failed for "${seed}"`, error);
+        // One dead seed should not sink a run that has already gathered
+        // hundreds of keywords from the others.
+        log.warn(`SearchAtlas lookup failed for "${seed}"`, error);
       }
     }
 
@@ -258,152 +306,211 @@ export class SearchAtlasProvider implements KeywordProvider {
     geo: GeoOptions,
     limit = 1000,
   ): Promise<RankedKeyword[]> {
-    const payload = await this.request(ENDPOINTS.rankedKeywords, {
-      domain: normaliseDomain(domain),
-      target: normaliseDomain(domain),
-      country: geo.country,
-      location: geo.country,
-      language: geo.locale?.split("-")[0] ?? "en",
-      limit,
+    const clean = normaliseDomain(domain);
+
+    const payload = await this.call(TOOLS.domain, {
+      domain: clean,
+      facets: ["organic"],
+      // Get-or-create: without this a domain SearchAtlas has not indexed yet
+      // returns nothing and never starts being indexed.
+      create_project: true,
+      page_size: Math.min(limit, 1000),
+      ...this.geoArgs(geo),
     });
 
-    return rows(payload)
-      .map((row): RankedKeyword | null => {
-        const keyword = str(pick(row, "keyword", "term", "query"));
-        const url = str(pick(row, "url", "page", "landing_page", "ranked_url"));
-        const position = num(pick(row, "position", "rank", "pos"));
-        if (!keyword || position === null) return null;
+    const ranked = rows(payload)
+      .map(mapRanked)
+      .filter((row): row is RankedKeyword => row !== null);
 
-        return {
-          keyword,
-          url: url ?? "",
-          position,
-          volume: num(pick(row, "volume", "search_volume", "searchVolume")),
-          difficulty: num(pick(row, "difficulty", "keyword_difficulty", "kd")),
-          ...(str(pick(row, "title", "page_title")) !== undefined
-            ? { title: str(pick(row, "title", "page_title")) as string }
-            : {}),
-        };
-      })
-      .filter((r): r is RankedKeyword => r !== null);
+    if (ranked.length === 0) {
+      log.warn(
+        `No organic keywords for ${clean}. A newly created Site Explorer ` +
+          "project takes 24-48h to populate — this fills in on a later run.",
+      );
+    }
+
+    return ranked.slice(0, limit);
   }
 
   async getSerp(keyword: string, geo: GeoOptions): Promise<SerpResult> {
-    const payload = await this.request(ENDPOINTS.serp, {
+    const payload = await this.call(TOOLS.serp, {
+      mode: process.env.SEARCHATLAS_SERP_MODE ?? "serp_overview",
       keyword,
-      query: keyword,
-      country: geo.country,
-      location: geo.country,
-      language: geo.locale?.split("-")[0] ?? "en",
+      ...this.geoArgs(geo),
     });
 
     const results: SerpEntry[] = rows(payload)
       .map((row): SerpEntry | null => {
-        const url = str(pick(row, "url", "link"));
+        const url = str(pick(row, "url", "link", "result_url"));
         const position = num(pick(row, "position", "rank", "pos"));
         if (!url || position === null) return null;
+
+        const title = str(pick(row, "title"));
+        const snippet = str(pick(row, "snippet", "description"));
         return {
           position,
           url,
           domain: normaliseDomain(url),
-          ...(str(pick(row, "title")) !== undefined
-            ? { title: str(pick(row, "title")) as string }
-            : {}),
-          ...(str(pick(row, "snippet", "description")) !== undefined
-            ? { snippet: str(pick(row, "snippet", "description")) as string }
-            : {}),
+          ...(title !== undefined ? { title } : {}),
+          ...(snippet !== undefined ? { snippet } : {}),
         };
       })
-      .filter((r): r is SerpEntry => r !== null)
+      .filter((entry): entry is SerpEntry => entry !== null)
       .sort((a, b) => a.position - b.position);
 
     const container = (payload ?? {}) as Json;
     const paa = pick(container, "people_also_ask", "peopleAlsoAsk", "questions");
     const related = pick(container, "related_searches", "relatedSearches");
 
+    const strings = (value: unknown, key: string): string[] =>
+      Array.isArray(value)
+        ? value
+            .map((item) =>
+              typeof item === "string" ? item : str((item as Json)?.[key]),
+            )
+            .filter((item): item is string => Boolean(item))
+        : [];
+
     return {
       keyword,
       results,
-      peopleAlsoAsk: Array.isArray(paa)
-        ? paa
-            .map((q) =>
-              typeof q === "string" ? q : str((q as Json)?.question ?? ""),
-            )
-            .filter((q): q is string => Boolean(q))
-        : [],
-      relatedSearches: Array.isArray(related)
-        ? related
-            .map((q) =>
-              typeof q === "string" ? q : str((q as Json)?.keyword ?? ""),
-            )
-            .filter((q): q is string => Boolean(q))
-        : [],
+      peopleAlsoAsk: strings(paa, "question"),
+      relatedSearches: strings(related, "keyword"),
     };
   }
-}
 
-/**
- * Returns the provider, or null when no key is configured.
- *
- * A null provider is survivable but not cheap: keyword clustering, the content
- * plan and article generation all still run, but volume and difficulty stay
- * blank and the **content gap comes back empty** — `analyseGap` returns early
- * without a provider, because a gap is by definition what competitors rank for,
- * and nothing else here knows their rankings.
- */
-export function createKeywordProvider(): KeywordProvider | null {
-  const apiKey = config.searchAtlas.apiKey;
-  if (!apiKey) {
-    log.warn(
-      "SEARCHATLAS_API_KEY is not set — keyword runs will have no volume or " +
-        "difficulty data, and no content gap. Clustering still works.",
-    );
-    return null;
+  /**
+   * The gap, computed by SearchAtlas rather than derived here.
+   *
+   * Their analysis is asynchronous; `wait` blocks server-side for it, and the
+   * results are then read by `analysis_id`. Only the first four competitors are
+   * sent because that is their documented ceiling — the rest are dropped
+   * loudly rather than silently truncated, since a missing competitor changes
+   * which keywords look like gaps.
+   */
+  async getKeywordGap(
+    clientDomain: string,
+    competitorDomains: string[],
+    geo: GeoOptions,
+    limit = 1000,
+  ): Promise<ContentGapRow[]> {
+    const primary = normaliseDomain(clientDomain);
+    const competitors = competitorDomains
+      .map(normaliseDomain)
+      .filter((domain) => domain && domain !== primary);
+
+    if (!primary || competitors.length === 0) return [];
+
+    const used = competitors.slice(0, MAX_GAP_COMPETITORS);
+    if (competitors.length > used.length) {
+      log.warn(
+        `SearchAtlas accepts ${MAX_GAP_COMPETITORS} competitors per gap ` +
+          `analysis; ignoring ${competitors.slice(MAX_GAP_COMPETITORS).join(", ")}`,
+      );
+    }
+
+    const created = await this.call(TOOLS.gapAnalyze, {
+      primary_website: primary,
+      competitor_websites: used,
+      scope: process.env.SEARCHATLAS_GAP_SCOPE ?? "root_domain",
+      wait: true,
+      ...this.geoArgs(geo),
+    });
+
+    const analysisId = findScalar(created, [
+      "analysis_id",
+      "analysisId",
+      "id",
+      "uuid",
+    ]);
+
+    // Some tools return the rows straight from the create call when waiting.
+    const inlineRows = rows(created);
+    const payload =
+      inlineRows.length > 0
+        ? created
+        : analysisId !== undefined
+          ? await this.call(TOOLS.gapResults, {
+              analysis_id: analysisId,
+              mode: "get",
+              page_size: Math.min(limit, 1000),
+            })
+          : null;
+
+    if (!payload) {
+      log.warn(
+        "SearchAtlas gap analysis returned neither rows nor an analysis id",
+      );
+      return [];
+    }
+
+    return rows(payload)
+      .map((row): ContentGapRow | null => {
+        const keyword = str(pick(row, "keyword", "term", "query"));
+        if (!keyword) return null;
+
+        const clientRank = num(
+          pick(
+            row,
+            "primary_position",
+            "primary_rank",
+            "client_position",
+            "your_position",
+            "position",
+          ),
+        );
+
+        const competitorEntries = used
+          .map((domain) => {
+            // Competitor positions arrive keyed by domain, by index, or as a
+            // nested list; all three spellings are tried before giving up.
+            const byDomain = pick(row, domain, domain.replace(/\./g, "_"));
+            const position = num(
+              typeof byDomain === "object" && byDomain
+                ? pick(byDomain as Json, "position", "rank")
+                : byDomain,
+            );
+            if (position === null) return null;
+            return {
+              domain,
+              url:
+                str(
+                  typeof byDomain === "object" && byDomain
+                    ? pick(byDomain as Json, "url", "page")
+                    : undefined,
+                ) ?? "",
+              position,
+            };
+          })
+          .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+          .sort((a, b) => a.position - b.position);
+
+        const nested = rows(pick(row, "competitors", "competitor_positions"));
+        for (const entry of nested) {
+          const position = num(pick(entry, "position", "rank"));
+          const domain = str(pick(entry, "domain", "website", "url"));
+          if (position === null || !domain) continue;
+          competitorEntries.push({
+            domain: normaliseDomain(domain),
+            url: str(pick(entry, "url", "page")) ?? "",
+            position,
+          });
+        }
+
+        return {
+          keyword,
+          volume: num(pick(row, "volume", "search_volume")),
+          difficulty: num(pick(row, "difficulty", "keyword_difficulty", "kd")),
+          clientRank,
+          competitors: competitorEntries,
+          // Trust the provider's own verdict when it ships one; otherwise fall
+          // back to the same rule computeContentGap uses.
+          isGap:
+            (pick(row, "is_gap", "isGap", "missing") as boolean | undefined) ??
+            (clientRank === null || clientRank > 20),
+        };
+      })
+      .filter((row): row is ContentGapRow => row !== null)
+      .slice(0, limit);
   }
-  return new SearchAtlasProvider(apiKey);
-}
-
-/**
- * One line for the startup banner, matching the image provider's.
- *
- * Without it a missing key is invisible until a keyword run comes back with
- * blank volume columns, which reads as a broken provider rather than an absent
- * one. Overridden paths are named too: they are the setting most likely to be
- * wrong, and the least likely to be remembered.
- */
-export function describeKeywordProvider(): string {
-  if (!config.searchAtlas.apiKey) {
-    return "Keywords: none configured — clusters and gaps only, no volume data";
-  }
-
-  // Spelled out rather than derived: the variable for `rankedKeywords` is
-  // SEARCHATLAS_PATH_RANKED, so uppercasing the key would silently never match.
-  const PATH_ENV_VARS = {
-    metrics: "SEARCHATLAS_PATH_METRICS",
-    related: "SEARCHATLAS_PATH_RELATED",
-    rankedKeywords: "SEARCHATLAS_PATH_RANKED",
-    serp: "SEARCHATLAS_PATH_SERP",
-  } as const satisfies Record<keyof typeof ENDPOINTS, string>;
-
-  const overridden = Object.entries(PATH_ENV_VARS)
-    .filter(([, variable]) => process.env[variable])
-    .map(([key]) => key);
-
-  if (overridden.length === 0) {
-    // Worth saying plainly: the shipped endpoints are guesses that a live probe
-    // has already disproved once, so an unconfigured worker is not ready.
-    return (
-      `Keywords: SearchAtlas · ${config.searchAtlas.baseUrl} · ` +
-      "endpoints UNVERIFIED — run `pnpm searchatlas:probe`"
-    );
-  }
-
-  const hosts = [
-    ...new Set(Object.values(ENDPOINTS).map((e) => new URL(e.url).host)),
-  ];
-
-  return (
-    `Keywords: SearchAtlas · ${hosts.join(", ")} · ` +
-    `configured: ${overridden.join(", ")}`
-  );
 }

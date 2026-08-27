@@ -10,6 +10,8 @@
  */
 
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 
 import {
   articles,
@@ -46,7 +48,8 @@ import {
   MODELS,
   resolveModel,
 } from "../apps/worker/src/providers/magnific.js";
-import { parseEndpoint } from "../apps/worker/src/providers/endpoint.js";
+import { unwrapToolResult } from "../apps/worker/src/providers/mcp-http.js";
+import { SearchAtlasProvider } from "../apps/worker/src/providers/searchatlas.js";
 // The shipping implementations, not copies: the claim query and the reaper are
 // the two places where a subtle change would pass typecheck and still lose or
 // duplicate work, so the test has to exercise the real ones.
@@ -566,47 +569,175 @@ async function pureTests(): Promise<void> {
     assert.deepEqual(types, ["BlogPosting"]);
   });
 
-  console.log("\nSearchAtlas endpoints");
+  console.log("\nMCP over HTTP");
 
-  const base = { url: "https://api.searchatlas.com/fallback", method: "POST" } as const;
-
-  await test("a bare path hangs off the default host", () => {
-    const parsed = parseEndpoint("/api/v2/keywords/overview", base);
-    assert.equal(parsed.url, "https://api.searchatlas.com/api/v2/keywords/overview");
-    assert.equal(parsed.method, "POST", "method should fall back");
-  });
-
-  await test("a full URL moves the endpoint to another host", () => {
-    // The whole point: SearchAtlas splits services across hosts, so an endpoint
-    // must be able to leave the default one entirely.
-    const parsed = parseEndpoint(
-      "https://keyword.searchatlas.com/api/v2/keywords/overview",
-      base,
+  await test("a tool result's text block is unwrapped to its JSON", () => {
+    // MCP wraps results in content blocks aimed at a model; the data we want
+    // is JSON inside one of them.
+    assert.deepEqual(
+      unwrapToolResult({ content: [{ type: "text", text: '{"volume":320}' }] }),
+      { volume: 320 },
     );
-    assert.equal(parsed.url, "https://keyword.searchatlas.com/api/v2/keywords/overview");
   });
 
-  await test("a leading verb sets the method", () => {
-    const parsed = parseEndpoint(
-      "GET https://keyword.searchatlas.com/api/v2/x",
-      base,
+  await test("structuredContent wins over the text block", () => {
+    assert.deepEqual(
+      unwrapToolResult({
+        structuredContent: { volume: 1 },
+        content: [{ type: "text", text: '{"volume":2}' }],
+      }),
+      { volume: 1 },
     );
-    assert.equal(parsed.method, "GET");
-    assert.equal(parsed.url, "https://keyword.searchatlas.com/api/v2/x");
-    // Lower case and extra spacing are what a hand-edited .env actually holds.
-    assert.equal(parseEndpoint("  get   /api/v2/x  ", base).method, "GET");
   });
 
-  await test("a path without a leading slash still resolves", () => {
+  await test("non-JSON text comes back as text, not as an error", () => {
     assert.equal(
-      parseEndpoint("api/v2/x", base).url,
-      "https://api.searchatlas.com/api/v2/x",
+      unwrapToolResult({ content: [{ type: "text", text: "no data" }] }),
+      "no data",
     );
   });
 
-  await test("an empty override falls back rather than breaking the URL", () => {
-    assert.deepEqual(parseEndpoint("   ", base), base);
+  console.log("\nSearchAtlas adapter");
+
+  /**
+   * A stand-in for the live endpoint.
+   *
+   * The real responses were never observable from where this was written, so
+   * the shapes here are deliberately awkward in the ways a real API is: the
+   * rows are nested two levels deep under different keys per tool, the field
+   * names are the alternate spellings rather than the obvious ones, and volume
+   * arrives as a string with a thousands separator. If the adapter's tolerance
+   * is real, this passes; if it only handles the tidy case, it does not.
+   */
+  const searchAtlas = createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      const message = JSON.parse(body || "{}") as {
+        id?: number;
+        method?: string;
+        params?: { name?: string; arguments?: Record<string, unknown> };
+      };
+      if (!message.id) return void res.writeHead(202).end();
+
+      const reply = (result: unknown): void => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+      };
+
+      if (message.method === "initialize") return reply({ serverInfo: {} });
+
+      const tool = message.params?.name;
+      const json = (value: unknown): unknown => ({
+        content: [{ type: "text", text: JSON.stringify(value) }],
+      });
+
+      if (tool === "se_research_keywords") {
+        return reply(
+          json({
+            project: {
+              keyword_data: [
+                { keyword_text: "kids trampoline", search_volume: "12,100", kd: 34, cpc: 0.8 },
+                { keyword_text: "", search_volume: 10 },
+              ],
+            },
+          }),
+        );
+      }
+
+      if (tool === "se_analyze_domain") {
+        return reply(
+          json({
+            facets: {
+              organic: [
+                { query: "garden trampoline", current_position: 4, landing_page: "https://x.com/a", search_volume: 900 },
+                { query: "no position here" },
+              ],
+            },
+          }),
+        );
+      }
+
+      if (tool === "se_keyword_gap_analyze") {
+        return reply(json({ analysis: { analysis_id: "an-1" } }));
+      }
+
+      if (tool === "se_get_keyword_gap_results") {
+        return reply(
+          json({
+            data: {
+              rows: [
+                {
+                  keyword: "trampoline safety net",
+                  search_volume: 480,
+                  primary_position: null,
+                  competitors: [
+                    { domain: "https://rival-b.com/x", position: 7, url: "https://rival-b.com/x" },
+                    { domain: "rival-a.com", position: 2 },
+                  ],
+                },
+              ],
+            },
+          }),
+        );
+      }
+
+      return reply(json({}));
+    });
   });
+
+  await new Promise<void>((resolve) => searchAtlas.listen(0, "127.0.0.1", resolve));
+  const port = (searchAtlas.address() as AddressInfo).port;
+  const provider = new SearchAtlasProvider(
+    { apiKey: "test" },
+    `http://127.0.0.1:${port}/mcp`,
+  );
+  const geo = { country: "gb", locale: "en-GB" };
+
+  try {
+    await test("metrics survive nesting, alternate spellings and a string volume", async () => {
+      const metrics = await provider.getMetrics(["kids trampoline"], geo);
+      assert.equal(metrics.length, 1, "the row with no keyword should be dropped");
+      assert.equal(metrics[0]?.keyword, "kids trampoline");
+      assert.equal(metrics[0]?.volume, 12100, "'12,100' should parse");
+      assert.equal(metrics[0]?.difficulty, 34);
+    });
+
+    await test("ranked keywords drop rows with no position", async () => {
+      const ranked = await provider.getRankedKeywords("https://acme.com/shop", geo);
+      assert.equal(ranked.length, 1);
+      assert.equal(ranked[0]?.keyword, "garden trampoline");
+      assert.equal(ranked[0]?.position, 4);
+    });
+
+    await test("the gap is read through the analysis id it returns", async () => {
+      const gap = await provider.getKeywordGap(
+        "acme.com",
+        ["rival-a.com", "rival-b.com"],
+        geo,
+      );
+      assert.equal(gap.length, 1);
+      assert.equal(gap[0]?.keyword, "trampoline safety net");
+      // No position for the client is what makes it a gap.
+      assert.equal(gap[0]?.clientRank, null);
+      assert.equal(gap[0]?.isGap, true);
+      // Competitor domains are normalised, whichever form they arrive in.
+      assert.deepEqual(
+        gap[0]?.competitors.map((c) => c.domain).sort(),
+        ["rival-a.com", "rival-b.com"],
+      );
+    });
+
+    await test("a gap needs competitors, and never counts the client", async () => {
+      assert.deepEqual(await provider.getKeywordGap("acme.com", [], geo), []);
+      assert.deepEqual(
+        await provider.getKeywordGap("acme.com", ["acme.com"], geo),
+        [],
+      );
+    });
+  } finally {
+    await new Promise<void>((resolve) => searchAtlas.close(() => resolve()));
+  }
 
   console.log("\nConnection strings");
 
