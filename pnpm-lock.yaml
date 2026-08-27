@@ -65,9 +65,6 @@ importers:
       '@seo/db':
         specifier: workspace:*
         version: link:../../packages/db
-      '@seo/playbook':
-        specifier: workspace:*
-        version: link:../../packages/seo
       '@seo/shared':
         specifier: workspace:*
         version: link:../../packages/shared

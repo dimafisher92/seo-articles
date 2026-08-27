@@ -1,7 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   // Workspace packages ship raw TypeScript; Next compiles them with the app.
-  transpilePackages: ["@seo/db", "@seo/shared", "@seo/playbook"],
+  transpilePackages: ["@seo/db", "@seo/shared"],
 
   experimental: {
     serverActions: { bodySizeLimit: "4mb" },
