@@ -7,7 +7,7 @@ import { closeDb } from "@seo/db";
 
 import { claimJob, reportComplete, reportFailure, reportProgress } from "./api.js";
 import { ClaudeStageError, sleep } from "./claude.js";
-import { assertClaudeCredentials, config } from "./config.js";
+import { assertClaudeCredentials, config, describeStageModels } from "./config.js";
 import { log } from "./log.js";
 import { runContentPlan } from "./pipelines/content-plan.js";
 import { runCrawlSite } from "./pipelines/crawl-site.js";
@@ -104,10 +104,16 @@ async function tick(): Promise<boolean> {
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    // A timeout is not a blip. The job ran for the whole deadline and would
+    // spend it again to reach the same place: three attempts at 45 minutes is
+    // over two hours of subscription tokens for a result already known. What
+    // it wrote is saved; retrying it is not.
     const retryable =
-      error instanceof ClaudeStageError
-        ? error.retryable
-        : error instanceof JobTimeoutError || isTransient(message);
+      error instanceof JobTimeoutError
+        ? false
+        : error instanceof ClaudeStageError
+          ? error.retryable
+          : isTransient(message);
 
     log.error(`✖ ${job.type} failed: ${message}`);
     await reportFailure(job.id, message, retryable).catch((reportError) => {
@@ -134,9 +140,9 @@ async function main(): Promise<void> {
   assertClaudeCredentials();
   log.info(`Worker ${config.workerId} polling ${config.appUrl}`);
   log.info(
-    `Claude: ${config.claude.oauthToken ? "subscription (OAuth token)" : "API key"} · ` +
-      `model ${config.claude.model}`,
+    `Claude: ${config.claude.oauthToken ? "subscription (OAuth token)" : "API key"}`,
   );
+  log.info(`  ${describeStageModels()}`);
 
   log.info(describeKeywordProvider());
   log.info(describeImageProvider());

@@ -38,6 +38,7 @@ import {
 
 import { ingestImage } from "../api.js";
 import { RESEARCH_TOOLS, runStageWithRetry } from "../claude.js";
+import { stageModels } from "../config.js";
 import {
   db,
   loadBrandAssets,
@@ -125,6 +126,7 @@ export async function runWriteArticle(
       {
         schema: serpIntelSchema,
         label: "serp-intel",
+        model: stageModels.serpIntel,
         tools: RESEARCH_TOOLS,
         maxTurns: 45,
         timeoutMs: 20 * 60_000,
@@ -136,7 +138,13 @@ export async function runWriteArticle(
 
     const outline = await runStageWithRetry<OutlineOutput>(
       outlinePrompt(brand, brief, serpIntel, playbook),
-      { schema: outlineSchema, label: "outline", maxTurns: 4, timeoutMs: 15 * 60_000 },
+      {
+        schema: outlineSchema,
+        label: "outline",
+        model: stageModels.outline,
+        maxTurns: 4,
+        timeoutMs: 15 * 60_000,
+      },
     );
 
     await db()
@@ -159,7 +167,13 @@ export async function runWriteArticle(
 
     const draft = await runStageWithRetry<DraftOutput>(
       draftPrompt(brand, { ...brief, title: outline.title }, outline, serpIntel, playbook),
-      { schema: draftSchema, label: "draft", maxTurns: 6, timeoutMs: 25 * 60_000 },
+      {
+        schema: draftSchema,
+        label: "draft",
+        model: stageModels.draft,
+        maxTurns: 6,
+        timeoutMs: 25 * 60_000,
+      },
     );
 
     /* 4-5 — review and revise, until it is actually clean ----------------- */
@@ -181,6 +195,7 @@ export async function runWriteArticle(
     let appliedFixes: string[] = [];
     let issues: QaIssue[] = [];
     let blocking: QaIssue[] = [];
+    let previousProblems = Number.POSITIVE_INFINITY;
 
     for (let pass = 1; pass <= MAX_REVIEW_PASSES; pass++) {
       await report(
@@ -210,7 +225,13 @@ export async function runWriteArticle(
 
       const qa = await runStageWithRetry<QaOutput>(
         qaPrompt(brand, brief, bodyMdx, failed, playbook),
-        { schema: qaSchema, label: `qa-${pass}`, maxTurns: 4, timeoutMs: 15 * 60_000 },
+        {
+          schema: qaSchema,
+          label: `qa-${pass}`,
+          model: stageModels.qa,
+          maxTurns: 4,
+          timeoutMs: 15 * 60_000,
+        },
       );
 
       issues = qa.issues;
@@ -228,6 +249,19 @@ export async function runWriteArticle(
       }
 
       log.info(`Review pass ${pass}: ${gate.reason}`);
+
+      // 7 findings then 4 is progress worth another pass; 4 then 4 is a pass
+      // spent rewriting an article the review will object to identically. The
+      // run that hit the deadline was on its third revision of a draft that
+      // had stopped improving.
+      if (pass > 1 && gate.problemCount >= previousProblems) {
+        log.warn(
+          `Review is no longer converging (${previousProblems} → ${gate.problemCount} ` +
+            "outstanding); stopping rather than spending another pass",
+        );
+        break;
+      }
+      previousProblems = gate.problemCount;
 
       if (pass === MAX_REVIEW_PASSES) {
         // Out of passes. The article is kept in full — status says what it is.
@@ -251,7 +285,13 @@ export async function runWriteArticle(
 
       const revised = await runStageWithRetry<ReviseOutput>(
         revisePrompt(brand, bodyMdx, qa.instructions, playbook),
-        { schema: reviseSchema, label: `revise-${pass}`, maxTurns: 6, timeoutMs: 25 * 60_000 },
+        {
+          schema: reviseSchema,
+          label: `revise-${pass}`,
+          model: stageModels.revise,
+          maxTurns: 6,
+          timeoutMs: 25 * 60_000,
+        },
       );
 
       bodyMdx = revised.bodyMdx;
@@ -263,7 +303,13 @@ export async function runWriteArticle(
 
     const meta = await runStageWithRetry<MetaOutput>(
       metaPrompt(brand, brief, outline.title, bodyMdx),
-      { schema: metaSchema, label: "meta", maxTurns: 4, timeoutMs: 10 * 60_000 },
+      {
+        schema: metaSchema,
+        label: "meta",
+        model: stageModels.meta,
+        maxTurns: 4,
+        timeoutMs: 10 * 60_000,
+      },
     );
 
     /* 7 — images ---------------------------------------------------------- */
@@ -416,7 +462,13 @@ async function produceImages(params: {
       })),
       mode,
     ),
-    { schema: imagePlanSchema, label: "image-plan", maxTurns: 4, timeoutMs: 10 * 60_000 },
+    {
+      schema: imagePlanSchema,
+      label: "image-plan",
+      model: stageModels.images,
+      maxTurns: 4,
+      timeoutMs: 10 * 60_000,
+    },
   );
 
   await db().delete(articleImages).where(eq(articleImages.articleId, params.articleId));
@@ -426,35 +478,48 @@ async function produceImages(params: {
     .filter((id): id is string => Boolean(id));
   const assetsById = await loadBrandAssetsByIds(assetIds);
 
-  const resolved: ResolvedImage[] = [];
-  const ordered = plan.images.sort((a, b) =>
+  const ordered = [...plan.images].sort((a, b) =>
     a.role === b.role ? a.position - b.position : a.role === "hero" ? -1 : 1,
   );
 
-  for (const [index, spec] of ordered.entries()) {
-    await params.report(
-      7,
-      TOTAL_STEPS,
-      "Generating images",
-      `${index + 1}/${ordered.length}`,
-    );
-
-    const [row] = await db()
-      .insert(articleImages)
-      .values({
+  // Rows first, in order, so positions are stable regardless of which image
+  // finishes first.
+  const rows = await db()
+    .insert(articleImages)
+    .values(
+      ordered.map((spec) => ({
         articleId: params.articleId,
         role: spec.role,
         position: spec.position,
         source: spec.source,
-        status: "generating",
+        status: "generating" as const,
         brandAssetId: spec.brandAssetId ?? null,
         prompt: spec.prompt ?? null,
         placementHeading: spec.placementHeading ?? null,
         altText: spec.altText,
         caption: spec.caption ?? null,
-      })
-      .returning();
-    if (!row) continue;
+      })),
+    )
+    .returning();
+
+  /**
+   * Generated in parallel, a few at a time.
+   *
+   * These are independent, and each takes 10-40 seconds plus polling — done one
+   * after another that is minutes of an article's wall-clock spent waiting on a
+   * queue of its own making. Bounded rather than unbounded because Magnific
+   * rate-limits: hitting a 429 after waiting is worse than waiting a little
+   * longer.
+   */
+  const CONCURRENCY = 3;
+
+  let done = 0;
+  const settled = new Array<ResolvedImage | null>(ordered.length).fill(null);
+
+  async function renderAt(index: number): Promise<void> {
+    const spec = ordered[index];
+    const row = rows[index];
+    if (!spec || !row) return;
 
     try {
       const blobUrl =
@@ -484,7 +549,7 @@ async function produceImages(params: {
         .set({ blobUrl, status: "ready", error: null })
         .where(eq(articleImages.id, row.id));
 
-      resolved.push({
+      settled[index] = {
         id: row.id,
         role: spec.role,
         position: spec.position,
@@ -492,7 +557,7 @@ async function produceImages(params: {
         altText: spec.altText,
         caption: spec.caption ?? null,
         placementHeading: spec.placementHeading ?? null,
-      });
+      };
     } catch (error) {
       // One failed image should not lose a finished article — the editor lets a
       // human regenerate or replace it afterwards.
@@ -502,8 +567,28 @@ async function produceImages(params: {
         .update(articleImages)
         .set({ status: "failed", error: message })
         .where(eq(articleImages.id, row.id));
+    } finally {
+      done += 1;
+      await params.report(
+        7,
+        TOTAL_STEPS,
+        "Generating images",
+        `${done}/${ordered.length}`,
+      );
     }
   }
+
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, ordered.length) }, async () => {
+      for (let index = next++; index < ordered.length; index = next++) {
+        await renderAt(index);
+      }
+    }),
+  );
+
+  // Order is the plan's, not whichever finished first.
+  const resolved = settled.filter((image): image is ResolvedImage => image !== null);
 
   return resolved;
 }

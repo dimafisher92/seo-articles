@@ -58,6 +58,10 @@ import { unwrapToolResult } from "../apps/worker/src/providers/mcp-http.js";
 import { gapHint } from "../apps/web/lib/gap-hint.js";
 import { jobsToShow, type JobView } from "../apps/web/lib/job-banner.js";
 import {
+  describeStageModels,
+  resolveStageModels,
+} from "../apps/worker/src/stage-models.js";
+import {
   JobTimeoutError,
   makeReporter,
   startHeartbeat,
@@ -435,6 +439,43 @@ async function pureTests(): Promise<void> {
     assert.equal(checks.checks.find((c) => c.id === "machine-tells")?.passed, false);
   });
 
+  section("Stage models");
+
+  const tiers = { strong: "claude-opus-5", fast: "claude-sonnet-5" };
+
+  await test("mechanical stages run cheaper, judgement stages do not", () => {
+    // Review decides whether an article ships; making it cheaper would give
+    // back the thing the gate exists for.
+    const models = resolveStageModels({}, tiers);
+    for (const stage of ["outline", "draft", "qa", "revise"] as const) {
+      assert.equal(models[stage], tiers.strong, `${stage} should be strong`);
+    }
+    for (const stage of ["serpIntel", "meta", "images"] as const) {
+      assert.equal(models[stage], tiers.fast, `${stage} should be fast`);
+    }
+  });
+
+  await test("any stage can be moved without a release", () => {
+    const models = resolveStageModels({ CLAUDE_MODEL_QA: "claude-fable-5" }, tiers);
+    assert.equal(models.qa, "claude-fable-5");
+    assert.equal(models.draft, tiers.strong, "other stages are unaffected");
+  });
+
+  await test("a blank override falls back rather than emptying the model", () => {
+    // An env var set to "" is how a half-edited .env reaches the worker.
+    assert.equal(
+      resolveStageModels({ CLAUDE_MODEL_DRAFT: "   " }, tiers).draft,
+      tiers.strong,
+    );
+  });
+
+  await test("the banner groups stages by model", () => {
+    const line = describeStageModels(resolveStageModels({}, tiers));
+    assert.match(line, /claude-opus-5: /);
+    assert.match(line, /claude-sonnet-5: /);
+    assert.match(line, /qa/);
+  });
+
   section("QA gate");
 
   await test("a high finding forces a revision even on a ship verdict", () => {
@@ -477,6 +518,25 @@ async function pureTests(): Promise<void> {
     assert.equal(
       gateDraft({ verdict: "revise", issues: [], failedCheckIds: [] }).mustRevise,
       true,
+    );
+  });
+
+  await test("outstanding work counts findings and failed checks together", () => {
+    // What the revision loop watches to decide it is still converging. Counting
+    // only the findings reads as "nothing improving" for a draft whose problems
+    // are all failed checks, and stops the loop on its second pass.
+    assert.equal(
+      gateDraft({
+        verdict: "ship",
+        issues: [{ severity: "high", note: "invented figure" }],
+        failedCheckIds: ["word-count", "image-count"],
+      }).problemCount,
+      2,
+      "one finding plus one blocking check; image-count does not block",
+    );
+    assert.equal(
+      gateDraft({ verdict: "ship", issues: [], failedCheckIds: [] }).problemCount,
+      0,
     );
   });
 

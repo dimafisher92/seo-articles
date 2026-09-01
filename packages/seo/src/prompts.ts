@@ -304,6 +304,12 @@ export function outlinePrompt(
   serpIntel: unknown,
   playbook: string,
 ): string {
+  const target = brief.targetWordCount ?? 1500;
+  // One H2 per ~350 words, floored at four so a short piece still has shape.
+  // Left to itself the outline fragments: sections proliferate, each too thin
+  // to carry an idea, and the draft pads to fill them.
+  const maxSections = Math.max(4, Math.round(target / 350));
+
   return `${SENIOR_SEO_IDENTITY}
 
 ${renderBrandContext(brand)}
@@ -323,10 +329,11 @@ Requirements:
 - Open with an answer-first lead: 100-150 words that directly answer "${brief.mainKeyword}" and would stand alone if an AI Overview quoted only that.
 - Cover the consensus points, because omitting them reads as incomplete — but do not lead with them and do not spend the article's length on them.
 - Build the middle around the gaps and the angle. This is where the article earns its ranking.
-- Phrase at least two H2s as questions people actually search.
+- Every H2 is a question people actually search, answered by the first sentence beneath it. A heading that only labels its contents cannot be lifted by an AI Overview.
 - Cover every entity from the SERP intel somewhere in the structure.
 - Include an FAQ section drawn from the PAA questions — minimum 3, only questions the body genuinely answers.
-- Assign each section a word budget. The budgets must sum to roughly ${brief.targetWordCount ?? 1500}.
+- Assign each section a word budget. The budgets must sum to roughly ${target}.
+- **${maxSections} H2 sections at most**, and no section under 150 words. A previous outline split ${target} words across fourteen sections; each was too thin to say anything, the draft ran 68% over, and half the review's findings came from padding that existed only to fill them. Fewer sections that each earn their place.
 
 For each section give: heading, level (2 or 3), intent (what this section must deliver), talkingPoints (3-6 specifics to hit — real substance, not topic labels), targetWords.
 

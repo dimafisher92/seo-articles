@@ -28,6 +28,14 @@ export type GateDecision = {
   mustRevise: boolean;
   /** Findings serious enough to hold an article back on their own. */
   blocking: QaIssue[];
+  /**
+   * Everything outstanding — blocking findings plus failed writing checks.
+   *
+   * The number a caller watches to decide whether a revision loop is still
+   * converging. Counting only the findings misses a draft whose problems are
+   * all failed checks, and would read as "nothing improving" from the start.
+   */
+  problemCount: number;
   reason: string;
 };
 
@@ -60,11 +68,16 @@ export function gateDraft(input: GateInput): GateDecision {
   const blocking = input.issues.filter((issue) => issue.severity === "high");
   const failed = input.failedCheckIds.filter((id) => BLOCKING_CHECK_IDS.has(id));
 
+  const problemCount = blocking.length + failed.length;
+
   if (blocking.length > 0) {
     return {
       mustRevise: true,
       blocking,
-      reason: `${blocking.length} high-severity finding${blocking.length === 1 ? "" : "s"}`,
+      problemCount,
+      reason:
+        `${blocking.length} high-severity finding${blocking.length === 1 ? "" : "s"}` +
+        (failed.length > 0 ? `, failed checks: ${failed.join(", ")}` : ""),
     };
   }
 
@@ -72,6 +85,7 @@ export function gateDraft(input: GateInput): GateDecision {
     return {
       mustRevise: true,
       blocking: [],
+      problemCount,
       reason: `failed checks: ${failed.join(", ")}`,
     };
   }
@@ -79,10 +93,15 @@ export function gateDraft(input: GateInput): GateDecision {
   // Only once nothing objective is outstanding does the model's own opinion
   // get to ask for another pass.
   if (input.verdict === "revise") {
-    return { mustRevise: true, blocking: [], reason: "the review asked for a revision" };
+    return {
+      mustRevise: true,
+      blocking: [],
+      problemCount,
+      reason: "the review asked for a revision",
+    };
   }
 
-  return { mustRevise: false, blocking: [], reason: "clean" };
+  return { mustRevise: false, blocking: [], problemCount: 0, reason: "clean" };
 }
 
 /**

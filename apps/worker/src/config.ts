@@ -1,5 +1,10 @@
 import { config as loadEnv } from "dotenv";
 
+import {
+  describeStageModels as describe,
+  resolveStageModels,
+} from "./stage-models.js";
+
 loadEnv();
 
 function required(name: string): string {
@@ -34,9 +39,11 @@ export const config = {
    * without a deadline a job wedged inside a provider call reports itself alive
    * forever: the reaper leaves it be and it can be neither waited out nor
    * cancelled. Generous, because a full article with images legitimately takes
-   * a while.
+   * a while: research, outline, draft, up to three review passes with a
+   * revision between each, then metadata and images. Thirty was set when
+   * review ran once, and killed a run that was converging.
    */
-  jobTimeoutMinutes: Number(process.env.JOB_TIMEOUT_MINUTES ?? 30),
+  jobTimeoutMinutes: Number(process.env.JOB_TIMEOUT_MINUTES ?? 45),
 
   searchAtlas: {
     apiKey: optional("SEARCHATLAS_API_KEY"),
@@ -79,6 +86,21 @@ export const config = {
     fastModel: optional("CLAUDE_FAST_MODEL") ?? "claude-sonnet-5",
   },
 } as const;
+
+/**
+ * The per-stage split, resolved from this process's environment.
+ *
+ * The reasoning and the defaults live in stage-models.ts, which imports
+ * nothing — so the split is readable without this file's required variables.
+ */
+export const stageModels = resolveStageModels(process.env, {
+  strong: config.claude.model,
+  fast: config.claude.fastModel,
+});
+
+export function describeStageModels(): string {
+  return describe(stageModels);
+}
 
 export function assertClaudeCredentials(): void {
   if (!config.claude.oauthToken && !config.claude.apiKey) {
