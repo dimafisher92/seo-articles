@@ -10,6 +10,24 @@ export type AspectRatio =
   | "3:4"
   | "9:16";
 
+/**
+ * Every aspect ratio, so a provider adapter can be made to prove it handles
+ * all of them.
+ *
+ * A ratio added to the union above and forgotten in a provider's translation
+ * table is not a type error — the value only fails when the API rejects it,
+ * minutes into a generation, as a 400 naming a field rather than a ratio. This
+ * list makes that omission testable.
+ */
+export const ASPECT_RATIOS: readonly AspectRatio[] = [
+  "16:9",
+  "4:3",
+  "3:2",
+  "1:1",
+  "3:4",
+  "9:16",
+] as const;
+
 export type ImageResolution = "1k" | "2k" | "4k";
 
 export type GenerateImageRequest = {

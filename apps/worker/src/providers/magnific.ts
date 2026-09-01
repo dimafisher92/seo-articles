@@ -1,5 +1,6 @@
 import {
   sleep,
+  type AspectRatio,
   type GenerateImageRequest,
   type GeneratedImage,
   type ImageProvider,
@@ -68,11 +69,44 @@ function mimeTypeFor(url: string): string {
   }
 }
 
+/**
+ * Magnific names its aspect ratios rather than taking `w:h`.
+ *
+ * Sending "16:9" is rejected with a 400 listing the whole vocabulary — after
+ * the request has been queued, which is an expensive way to learn about a
+ * string. Their accepted values, verbatim from that error:
+ *
+ *   square_1_1, classic_4_3, traditional_3_4, widescreen_16_9,
+ *   social_story_9_16, standard_3_2, portrait_2_3, horizontal_2_1,
+ *   vertical_1_2, social_post_4_5
+ */
+const ASPECT_RATIO_NAMES: Record<AspectRatio, string> = {
+  "1:1": "square_1_1",
+  "4:3": "classic_4_3",
+  "3:4": "traditional_3_4",
+  "16:9": "widescreen_16_9",
+  "9:16": "social_story_9_16",
+  "3:2": "standard_3_2",
+};
+
+export function aspectRatioName(ratio: AspectRatio): string {
+  const name = ASPECT_RATIO_NAMES[ratio];
+  if (!name) {
+    // Fails here rather than at the API, which would report it as a rejected
+    // field several minutes and one queued job later.
+    throw new Error(
+      `No Magnific name for aspect ratio "${ratio}". Add it to ` +
+        `ASPECT_RATIO_NAMES; they accept: ${Object.values(ASPECT_RATIO_NAMES).join(", ")}.`,
+    );
+  }
+  return name;
+}
+
 /** Shared by every model; Magnific expects "1K"/"2K"/"4K". */
 function common(request: GenerateImageRequest): Json {
   return {
     prompt: request.prompt,
-    aspect_ratio: request.aspectRatio,
+    aspect_ratio: aspectRatioName(request.aspectRatio),
     resolution: request.resolution.toUpperCase(),
   };
 }

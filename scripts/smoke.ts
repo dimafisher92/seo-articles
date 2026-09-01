@@ -35,6 +35,8 @@ import {
   markdownToHtml,
   normaliseDomain,
   runSeoChecks,
+  ASPECT_RATIOS,
+  imageSpecForRole,
   scoreKeyword,
   slugify,
   truncate,
@@ -47,6 +49,7 @@ import {
   DEFAULT_MODEL,
   MODELS,
   resolveModel,
+  aspectRatioName,
 } from "../apps/worker/src/providers/magnific.js";
 import { unwrapToolResult } from "../apps/worker/src/providers/mcp-http.js";
 import { gapHint } from "../apps/web/lib/gap-hint.js";
@@ -352,6 +355,51 @@ async function pureTests(): Promise<void> {
     });
     const check = result.checks.find((c) => c.id === "paragraph-length");
     assert.equal(check?.passed, false);
+  });
+
+  section("Aspect ratios");
+
+  await test("every aspect ratio has a Magnific name", () => {
+    // Magnific rejects "16:9" and lists its own vocabulary in the 400 — after
+    // the request is queued. These are those values, verbatim from that error.
+    const accepted = new Set([
+      "square_1_1",
+      "classic_4_3",
+      "traditional_3_4",
+      "widescreen_16_9",
+      "social_story_9_16",
+      "standard_3_2",
+      "portrait_2_3",
+      "horizontal_2_1",
+      "vertical_1_2",
+      "social_post_4_5",
+    ]);
+
+    for (const ratio of ASPECT_RATIOS) {
+      const name = aspectRatioName(ratio);
+      assert.ok(
+        accepted.has(name),
+        `${ratio} maps to "${name}", which Magnific does not accept`,
+      );
+    }
+  });
+
+  await test("the ratios the article pipeline asks for translate", () => {
+    assert.equal(
+      aspectRatioName(imageSpecForRole("hero").aspectRatio),
+      "widescreen_16_9",
+    );
+    assert.equal(
+      aspectRatioName(imageSpecForRole("inline").aspectRatio),
+      "standard_3_2",
+    );
+  });
+
+  await test("an unmapped ratio fails here, not at the API", () => {
+    assert.throws(
+      () => aspectRatioName("21:9" as (typeof ASPECT_RATIOS)[number]),
+      /No Magnific name for aspect ratio/,
+    );
   });
 
   section("Image models");
