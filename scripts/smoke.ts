@@ -55,6 +55,7 @@ import {
   aspectRatioName,
 } from "../apps/worker/src/providers/magnific.js";
 import { unwrapToolResult } from "../apps/worker/src/providers/mcp-http.js";
+import { describeBlobFailure } from "../apps/web/lib/blob.js";
 import { gapHint } from "../apps/web/lib/gap-hint.js";
 import { jobsToShow, type JobView } from "../apps/web/lib/job-banner.js";
 import {
@@ -437,6 +438,35 @@ async function pureTests(): Promise<void> {
       bodyMdx: bodyWith("Es la parte que casi nadie lee."),
     });
     assert.equal(checks.checks.find((c) => c.id === "machine-tells")?.passed, false);
+  });
+
+  section("Image storage failures");
+
+  await test("a private store is explained, not reported as a bad gateway", () => {
+    // Verbatim from the live failure. The worker retried it three times
+    // because the route wrapped it in a 502 and 502 reads as transient.
+    const explanation = describeBlobFailure(
+      'Vercel Blob: Cannot use public access on a private store. ' +
+        'The store is configured with private access.',
+    );
+    assert.ok(explanation, "the failure should be recognised");
+    assert.match(explanation, /publicly readable/);
+    assert.match(explanation, /new store/);
+    assert.match(explanation, /BLOB_READ_WRITE_TOKEN/);
+  });
+
+  await test("a rejected token is told apart from a rejected store", () => {
+    assert.match(
+      describeBlobFailure("Vercel Blob: Unauthorized") ?? "",
+      /Check BLOB_READ_WRITE_TOKEN/,
+    );
+  });
+
+  await test("an unrecognised failure stays retryable", () => {
+    // Anything that might be a passing upstream problem must not be recast as
+    // permanent — that would turn a blip into a lost article.
+    assert.equal(describeBlobFailure("socket hang up"), null);
+    assert.equal(describeBlobFailure("503 Service Unavailable"), null);
   });
 
   section("Stage models");
