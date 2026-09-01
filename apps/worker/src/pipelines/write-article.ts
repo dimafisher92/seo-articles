@@ -35,6 +35,7 @@ import {
   buildJsonLd,
   markdownToHtml,
   placeImages,
+  stripFrontMatter,
   type PlacedImage,
 } from "@seo/shared";
 
@@ -173,7 +174,10 @@ export async function runWriteArticle(
         schema: draftSchema,
         label: "draft",
         model: stageModels.draft,
-        maxTurns: 6,
+        // The SDK spends a turn on every rejected structured-output attempt,
+        // and its own retry budget is five. At six turns the stage ran out of
+        // room for a single malformed response and died on an expensive draft.
+        maxTurns: 12,
         timeoutMs: 25 * 60_000,
       },
     );
@@ -193,7 +197,10 @@ export async function runWriteArticle(
      */
     const MAX_REVIEW_PASSES = 3;
 
-    let bodyMdx = draft.bodyMdx;
+    // A body opening on YAML front matter renders as `title: "…"` above the H1
+    // in the preview and in every export. The draft prompt forbids it and a
+    // draft arrived with it anyway, so it is dropped rather than trusted.
+    let bodyMdx = stripFrontMatter(draft.bodyMdx);
     let appliedFixes: string[] = [];
     let issues: QaIssue[] = [];
     let blocking: QaIssue[] = [];
@@ -291,12 +298,12 @@ export async function runWriteArticle(
           schema: reviseSchema,
           label: `revise-${pass}`,
           model: stageModels.revise,
-          maxTurns: 6,
+          maxTurns: 12,
           timeoutMs: 25 * 60_000,
         },
       );
 
-      bodyMdx = revised.bodyMdx;
+      bodyMdx = stripFrontMatter(revised.bodyMdx);
       appliedFixes = [...appliedFixes, ...revised.appliedFixes];
     }
 

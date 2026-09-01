@@ -12,6 +12,45 @@ const marked = new Marked({
 });
 
 /**
+ * Removes a YAML front-matter block from the top of a body.
+ *
+ * The draft stage is told to start at the H1, and one run started at
+ * `---\ntitle: "…"\n---` instead. The renderer has no notion of front matter, so
+ * the preview and every HTML export printed `title: "…" description: "…"` as
+ * prose above the heading. `leadParagraph` skips such a block already, which is
+ * why the scores looked fine while the article read as broken.
+ *
+ * Only a block at the very start is a front matter. A `---` further down is a
+ * thematic break and belongs to the article.
+ */
+export function stripFrontMatter(markdown: string): string {
+  const match = /^\uFEFF?\s*---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(
+    markdown,
+  );
+  if (!match) return markdown;
+
+  // An article may legitimately open on a thematic break, and a second `---`
+  // further down would then close a block that was never front matter. So the
+  // contents have to look like front matter: `key: value` lines, no prose.
+  const lines = (match[1] ?? "").split("\n").filter((line) => line.trim());
+
+  // A key at the top level, a list item, or an indented continuation of the
+  // line above. Anything else — a sentence, a heading — means this is article
+  // text between two thematic breaks, and it stays.
+  const isYamlLine = (line: string): boolean =>
+    /^\s/.test(line) || /^(?:[A-Za-z_][\w.-]*\s*:|-\s+\S)/.test(line);
+
+  const looksLikeYaml =
+    lines.length > 0 &&
+    lines.some((line) => /^[A-Za-z_][\w.-]*\s*:/.test(line)) &&
+    lines.every(isYamlLine);
+
+  if (!looksLikeYaml) return markdown;
+
+  return markdown.slice(match[0].length).replace(/^\s*\n/, "");
+}
+
+/**
  * Images are rendered as figures with captions.
  *
  * The convention the article pipeline emits is an image followed by an

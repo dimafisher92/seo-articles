@@ -5,6 +5,7 @@ import { notFound } from "next/navigation";
 import { listArticles } from "@/app/actions/articles";
 import { getClient } from "@/app/actions/clients";
 import { ClientJobBanner } from "@/components/client-job-banner";
+import { RegenerateArticleButton } from "@/components/regenerate-article-button";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -54,10 +55,18 @@ export default async function ArticlesPage({
           {articles.map((article) => {
             const score = article.seoScore?.total ?? 0;
             return (
-              <li key={article.id}>
+              <li
+                key={article.id}
+                className="flex flex-wrap items-center gap-3 bg-card px-4 py-3 transition-colors hover:bg-muted/40"
+              >
+                {/*
+                  The row is not one big link any more. A button nested inside
+                  an anchor is invalid markup and, in practice, a click that
+                  navigates away from the thing it was meant to act on.
+                */}
                 <Link
                   href={`/clients/${id}/articles/${article.id}`}
-                  className="flex flex-wrap items-center gap-3 bg-card px-4 py-3 transition-colors hover:bg-muted/40"
+                  className="flex min-w-0 flex-1 flex-wrap items-center gap-3"
                 >
                   <div className="min-w-0 flex-1">
                     <p className="truncate font-medium">{article.title}</p>
@@ -101,6 +110,12 @@ export default async function ArticlesPage({
                       : article.status}
                   </Badge>
                 </Link>
+
+                <RegenerateArticleButton
+                  articleId={article.id}
+                  planStatus={article.planStatus}
+                  className="shrink-0"
+                />
               </li>
             );
           })}

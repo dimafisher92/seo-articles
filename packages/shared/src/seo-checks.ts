@@ -1,3 +1,4 @@
+import { stripFrontMatter } from "./render/markdown.js";
 import type { SeoCheck, SeoScore } from "./types.js";
 
 /**
@@ -104,7 +105,7 @@ export function extractHeadings(
 
 /** Prose before the first heading — the passage AI Overviews tends to lift. */
 export function leadParagraph(markdown: string): string {
-  const body = markdown.replace(/^---[\s\S]*?---\s*/, "");
+  const body = stripFrontMatter(markdown);
   const beforeHeading = body.split(/\n#{2,6}\s/)[0] ?? body;
   return beforeHeading
     .replace(/^#\s+.*$/m, "")

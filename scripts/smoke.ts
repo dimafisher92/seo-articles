@@ -36,6 +36,7 @@ import {
   normaliseDomain,
   runSeoChecks,
   reconcileImages,
+  stripFrontMatter,
   stripUnknownImages,
   type PlacedImage,
   findMachineTells,
@@ -61,6 +62,10 @@ import { unwrapToolResult } from "../apps/worker/src/providers/mcp-http.js";
 import { describeBlobFailure } from "../apps/web/lib/blob.js";
 import { gapHint } from "../apps/web/lib/gap-hint.js";
 import { jobsToShow, type JobView } from "../apps/web/lib/job-banner.js";
+import {
+  canRegenerate,
+  regenerateLabel,
+} from "../apps/web/lib/regenerate.js";
 import {
   describeStageModels,
   resolveStageModels,
@@ -997,6 +1002,114 @@ async function pureTests(): Promise<void> {
       gapHint({ gapKeywords: 12, competitorsAnalysed: ["rival.com"] }),
       "Competitors rank, this client does not",
     );
+  });
+
+  console.log("\nFront matter");
+
+  const FRONT_MATTER_BODY = [
+    "---",
+    'title: "Houston Car Accident Lawyer Fees"',
+    'description: "What a contingency fee actually costs."',
+    'slug: "houston-car-accident-lawyer-fees"',
+    'author: "The Firm"',
+    "---",
+    "",
+    "# Houston Car Accident Lawyer Fees",
+    "",
+    "Most Houston car accident lawyers take a third of the settlement.",
+    "",
+    "## What does a contingency fee cover?",
+    "",
+    "Everything up to trial.",
+  ].join("\n");
+
+  await test("a leading YAML block is dropped, the H1 becomes the first line", () => {
+    const stripped = stripFrontMatter(FRONT_MATTER_BODY);
+    assert.equal(
+      stripped.split("\n")[0],
+      "# Houston Car Accident Lawyer Fees",
+    );
+    assert.ok(!stripped.includes("slug:"));
+  });
+
+  await test("a body without front matter is returned untouched", () => {
+    const body = "# Title\n\nA sentence.\n";
+    assert.equal(stripFrontMatter(body), body);
+  });
+
+  await test("a thematic break mid-article survives", () => {
+    const body = "# Title\n\nOne.\n\n---\n\nTwo: a line.\n\n---\n";
+    assert.equal(stripFrontMatter(body), body);
+  });
+
+  await test("prose fenced by rules at the top is not mistaken for metadata", () => {
+    // An article may open on a thematic break. Eating everything up to the
+    // next one would silently delete its lead.
+    const body = "---\n\nMost lawyers take a third.\n\n---\n\n# Title\n";
+    assert.equal(stripFrontMatter(body), body);
+  });
+
+  await test("stripping twice changes nothing the second time", () => {
+    const once = stripFrontMatter(FRONT_MATTER_BODY);
+    assert.equal(stripFrontMatter(once), once);
+  });
+
+  await test("front matter is gone from the rendered article, not just the source", () => {
+    // The visible bug: the preview and every HTML export printed
+    // `title: "…" description: "…"` as a paragraph above the heading. The
+    // scores never showed it — `leadParagraph` skips such a block already —
+    // which is why it survived to a reader.
+    assert.ok(markdownToHtml(FRONT_MATTER_BODY).includes("slug:"));
+    assert.ok(
+      !markdownToHtml(stripFrontMatter(FRONT_MATTER_BODY)).includes("slug:"),
+    );
+  });
+
+  await test("the lead is the article's own opening either way", () => {
+    // One rule for what front matter is: the check used to carry its own,
+    // looser pattern, and two definitions of the same thing drift.
+    const input = {
+      title: "Houston Car Accident Lawyer Fees",
+      titleTag: "Houston Car Accident Lawyer Fees | The Firm",
+      metaDescription: "What a contingency fee actually costs in Houston.",
+      slug: "houston-car-accident-lawyer-fees",
+      mainKeyword: "houston car accident lawyer",
+      secondaryKeywords: [],
+      faqCount: 3,
+      internalLinkCount: 2,
+      externalSourceCount: 2,
+      imageCount: 3,
+      imagesMissingAlt: 0,
+      targetWordCount: null,
+    };
+
+    const detail = (bodyMdx: string): string | undefined =>
+      runSeoChecks({ ...input, bodyMdx }).checks.find(
+        (c) => c.id === "opening-answer",
+      )?.detail;
+
+    assert.equal(
+      detail(FRONT_MATTER_BODY),
+      detail(stripFrontMatter(FRONT_MATTER_BODY)),
+    );
+  });
+
+  console.log("\nRegenerating an article");
+
+  await test("a run in flight cannot be commissioned again", () => {
+    assert.equal(canRegenerate("queued"), false);
+    assert.equal(canRegenerate("generating"), false);
+  });
+
+  await test("a finished or failed article can be re-run", () => {
+    for (const status of ["planned", "drafted", "approved", "exported", "failed"] as const) {
+      assert.equal(canRegenerate(status), true, status);
+    }
+  });
+
+  await test("a failed run offers a retry, a finished one a rewrite", () => {
+    assert.equal(regenerateLabel("failed"), "Retry");
+    assert.equal(regenerateLabel("drafted"), "Regenerate");
   });
 
   console.log("\nJob banner");

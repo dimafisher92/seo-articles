@@ -18,6 +18,7 @@ import { writeArticle } from "@/app/actions/articles";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/misc";
+import { canRegenerate, REGENERATE_CONFIRMATION } from "@/lib/regenerate";
 import { cn } from "@/lib/utils";
 
 const STATUS: Record<
@@ -256,7 +257,7 @@ function WriteButton({
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
-  const busy = status === "queued" || status === "generating";
+  const busy = !canRegenerate(status);
   const label = status === "failed" ? "Retry" : hasArticle ? "Regenerate" : "Write article";
 
   return (
@@ -273,10 +274,7 @@ function WriteButton({
             if (
               hasArticle &&
               status !== "failed" &&
-              !window.confirm(
-                "Regenerate this article? The current text, metadata and images " +
-                  "are replaced, and generation takes a while.",
-              )
+              !window.confirm(REGENERATE_CONFIRMATION)
             ) {
               return;
             }

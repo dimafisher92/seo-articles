@@ -2,10 +2,15 @@ import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { getArticle, listArticleImages } from "@/app/actions/articles";
+import {
+  getArticle,
+  getArticlePlanStatus,
+  listArticleImages,
+} from "@/app/actions/articles";
 import { listBrandAssets } from "@/app/actions/brand-vault";
 import { ArticleEditor } from "@/components/article-editor";
 import { ClientJobBanner } from "@/components/client-job-banner";
+import { RegenerateArticleButton } from "@/components/regenerate-article-button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 
@@ -21,9 +26,10 @@ export default async function ArticlePage({
   const article = await getArticle(articleId);
   if (!article || article.clientId !== id) notFound();
 
-  const [images, brandAssets] = await Promise.all([
+  const [images, brandAssets, planStatus] = await Promise.all([
     listArticleImages(articleId),
     listBrandAssets(id),
+    getArticlePlanStatus(articleId),
   ]);
 
   return (
@@ -97,12 +103,26 @@ export default async function ArticlePage({
           article={article}
           images={images}
           brandAssets={brandAssets}
+          planStatus={planStatus}
         />
       ) : (
-        <p className="rounded-xl border border-dashed border-border px-6 py-16 text-center text-sm text-muted-foreground">
-          This article has not been written yet. If a generation job is running,
-          the draft appears here when it finishes.
-        </p>
+        <div className="rounded-xl border border-dashed border-border px-6 py-16 text-center">
+          <p className="text-sm text-muted-foreground">
+            This article has not been written yet. If a generation job is
+            running, the draft appears here when it finishes.
+          </p>
+          {/*
+            A draft stage that fails leaves exactly this screen, so the way to
+            re-run it belongs here rather than only back on the plan.
+          */}
+          <div className="mx-auto mt-4 w-48">
+            <RegenerateArticleButton
+              articleId={article.id}
+              planStatus={planStatus}
+              variant="default"
+            />
+          </div>
+        </div>
       )}
     </div>
   );

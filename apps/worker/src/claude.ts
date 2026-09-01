@@ -46,6 +46,43 @@ function isRateLimit(message: string): boolean {
 /** Web research stages need these; reasoning-only stages get no tools at all. */
 export const RESEARCH_TOOLS = ["WebSearch", "WebFetch"];
 
+/** Text of the tool results in one user message, if it carries any. */
+function lastToolResultText(message: unknown): string | undefined {
+  const content = (message as { message?: { content?: unknown } }).message
+    ?.content;
+  if (!Array.isArray(content)) return undefined;
+
+  const parts: string[] = [];
+  for (const block of content) {
+    if (
+      typeof block !== "object" ||
+      block === null ||
+      (block as { type?: string }).type !== "tool_result"
+    ) {
+      continue;
+    }
+
+    const inner = (block as { content?: unknown }).content;
+    if (typeof inner === "string") {
+      parts.push(inner);
+    } else if (Array.isArray(inner)) {
+      for (const piece of inner) {
+        const text = (piece as { text?: unknown }).text;
+        if (typeof text === "string") parts.push(text);
+      }
+    }
+  }
+
+  const joined = parts.join(" ").trim();
+  return joined || undefined;
+}
+
+/** Enough of a rejection to act on, not a whole article echoed into a log. */
+function truncateForLog(text: string, max = 600): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length <= max ? flat : `${flat.slice(0, max)}…`;
+}
+
 function buildEnv(): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = { ...process.env };
 
@@ -98,17 +135,42 @@ export async function runStage<T>(
     cwd: process.cwd(),
   };
 
+  /**
+   * The last thing the run was told, kept for the error message.
+   *
+   * Under `outputFormat` the SDK hands the model a structured-output tool and
+   * re-prompts it on a schema mismatch, up to five times. When those run out
+   * all it reports is "Failed to provide valid structured output after 5
+   * attempts" — the same sentence whether the JSON was truncated or a field was
+   * the wrong shape. The rejection itself comes back as a tool result in the
+   * stream, which this loop was discarding, so the one fact worth having was
+   * being thrown away on every failure.
+   */
+  let lastToolResult: string | undefined;
+
   try {
     for await (const message of query({ prompt, options: sdkOptions })) {
+      if (message.type === "user") {
+        const text = lastToolResultText(message);
+        if (text) lastToolResult = text;
+        continue;
+      }
+
       if (message.type !== "result") continue;
 
       if (message.subtype !== "success") {
-        const detail =
+        const errors =
           "errors" in message && message.errors.length > 0
             ? message.errors.join("; ")
-            : message.subtype;
+            : "";
+        // Which limit was hit is half the diagnosis, and the subtypes carry it.
+        const detail = [message.subtype, errors].filter(Boolean).join(": ");
+        const because = lastToolResult
+          ? ` — last rejection: ${truncateForLog(lastToolResult)}`
+          : "";
+
         throw new ClaudeStageError(
-          `Stage ${options.label} failed: ${detail}`,
+          `Stage ${options.label} failed: ${detail}${because}`,
           isRateLimit(detail) || message.subtype === "error_during_execution",
         );
       }

@@ -373,7 +373,8 @@ ${JSON.stringify(outline, null, 2)}
 Write the full article in Markdown, following the outline exactly.
 
 Hard requirements:
-- Start with the H1, then the answer-first lead. No preamble before the answer.
+- The very first line is the H1. No YAML front matter, no \`---\` block, no title/description/slug/author lines — that metadata is written by a later stage and reads as body text if you put it here.
+- After the H1, the answer-first lead. No preamble before the answer.
 - Use the outline's headings verbatim, in order, at the levels given.
 - Hit the section word budgets within about 15%.
 - Write in ${brand.locale}, in the client's tone of voice.
@@ -533,6 +534,8 @@ Apply every instruction and return the revised article.
 While you are in there, do a final pass against playbook section 11: strip inflated significance, not-just-X-but-Y constructions, rule-of-three padding, vague attribution, empty transitions and promotional register. Vary sentence length. Cut any sentence that survives deletion.
 
 Preserve: the heading structure, the internal and external links, the FAQ section, and every factual claim that was properly sourced. Do not shorten the article to avoid the work — fix the prose, keep the substance.
+
+Return the body only. The first line is the H1 — no YAML front matter and no \`---\` block above it.
 
 Return JSON only:
 {"bodyMdx": "the complete revised article in Markdown", "appliedFixes": ["what you changed"]}`;

@@ -4,7 +4,7 @@ import { Check, Download, Save, ShieldCheck } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
 
-import type { Article, ArticleImage, BrandAsset } from "@seo/db";
+import type { Article, ArticleImage, BrandAsset, PlanItem } from "@seo/db";
 import {
   countWords,
   markdownToHtml,
@@ -12,11 +12,13 @@ import {
   META_DESCRIPTION_MIN,
   readingTimeMinutes,
   runSeoChecks,
+  stripFrontMatter,
   TITLE_TAG_MAX,
 } from "@seo/shared";
 
 import { saveArticle, setArticleStatus } from "@/app/actions/articles";
 import { ArticleImagesPanel } from "@/components/article-images-panel";
+import { RegenerateArticleButton } from "@/components/regenerate-article-button";
 import { LengthMeter, SeoPanel } from "@/components/seo-panel";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Label, Textarea } from "@/components/ui/input";
@@ -37,10 +39,12 @@ export function ArticleEditor({
   article,
   images,
   brandAssets,
+  planStatus,
 }: {
   article: Article;
   images: ArticleImage[];
   brandAssets: BrandAsset[];
+  planStatus: PlanItem["status"] | null;
 }) {
   const router = useRouter();
   const [tab, setTab] = useState<Tab>("write");
@@ -53,7 +57,10 @@ export function ArticleEditor({
     titleTag: article.titleTag ?? "",
     metaDescription: article.metaDescription ?? "",
     slug: article.slug ?? "",
-    bodyMdx: article.bodyMdx ?? "",
+    // Front matter from an earlier draft run is dropped as the article opens,
+    // so a writer sees it gone and one Save makes that permanent. No silent
+    // migration behind their back.
+    bodyMdx: stripFrontMatter(article.bodyMdx ?? ""),
   });
 
   // Recomputed as the writer types, from the same rubric the worker used.
@@ -281,6 +288,11 @@ export function ArticleEditor({
               </a>
             </Button>
           </div>
+
+          <RegenerateArticleButton
+            articleId={article.id}
+            planStatus={planStatus}
+          />
 
           <div className="grid grid-cols-3 gap-1.5 text-center text-xs">
             {(["md", "html", "docx"] as const).map((format) => (
