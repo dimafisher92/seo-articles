@@ -35,6 +35,9 @@ import {
   markdownToHtml,
   normaliseDomain,
   runSeoChecks,
+  reconcileImages,
+  stripUnknownImages,
+  type PlacedImage,
   findMachineTells,
   gateDraft,
   statusAfterReview,
@@ -438,6 +441,91 @@ async function pureTests(): Promise<void> {
       bodyMdx: bodyWith("Es la parte que casi nadie lee."),
     });
     assert.equal(checks.checks.find((c) => c.id === "machine-tells")?.passed, false);
+  });
+
+  section("Images in the body");
+
+  const image = (over: Partial<PlacedImage> = {}): PlacedImage => ({
+    id: "img-1",
+    role: "inline",
+    position: 1,
+    blobUrl: "https://new.test/a.png",
+    altText: "a chart",
+    caption: null,
+    placementHeading: "How much does it cost?",
+    ...over,
+  });
+
+  const body = [
+    "# Title",
+    "",
+    "Opening line.",
+    "",
+    "## How much does it cost?",
+    "",
+    "Body text.",
+  ].join("\n");
+
+  await test("a regenerated image that was never in the body is placed", () => {
+    // The case the old substitution missed entirely: the previous generation
+    // failed, so there was no old URL to swap, and the body never got it.
+    const out = reconcileImages(body, [image()]);
+    assert.match(out, /!\[a chart\]\(https:\/\/new\.test\/a\.png\)/);
+    // Under its heading, not appended at the end.
+    assert.ok(
+      out.indexOf("a chart") < out.indexOf("Body text."),
+      "the image should sit under its heading",
+    );
+  });
+
+  await test("references to a replaced store are removed", () => {
+    // A Blob store was swapped; every URL from the old one renders broken.
+    const stale = [
+      "# Title",
+      "",
+      "![old hero](https://old-private.test/hero.png)",
+      "*A caption that went with it*",
+      "",
+      "Opening line.",
+    ].join("\n");
+
+    const out = reconcileImages(stale, []);
+    assert.ok(!out.includes("old-private.test"), "the dead URL should be gone");
+    assert.ok(!out.includes("A caption"), "its caption should go with it");
+    assert.match(out, /Opening line\./);
+  });
+
+  await test("the hero goes under the H1", () => {
+    const out = reconcileImages(body, [
+      image({ id: "h", role: "hero", placementHeading: null, blobUrl: "https://new.test/h.png" }),
+    ]);
+    const lines = out.split("\n").filter((line) => line.trim());
+    assert.match(lines[0] ?? "", /^# Title/);
+    assert.match(lines[1] ?? "", /h\.png/);
+  });
+
+  await test("reconciling twice changes nothing", () => {
+    // Regeneration runs this on a body it has already reconciled; a second
+    // pass must not duplicate the figure.
+    const once = reconcileImages(body, [image()]);
+    assert.equal(reconcileImages(once, [image()]), once);
+    assert.equal((once.match(/a\.png/g) ?? []).length, 1);
+  });
+
+  await test("an image whose heading was renamed is kept, not dropped", () => {
+    // It was paid for. A human can move it; silently losing it is worse.
+    const out = reconcileImages(body, [
+      image({ placementHeading: "A heading that no longer exists" }),
+    ]);
+    assert.match(out, /a\.png/);
+  });
+
+  await test("stripping leaves images that are still live", () => {
+    const withImage = reconcileImages(body, [image()]);
+    assert.equal(
+      stripUnknownImages(withImage, new Set(["https://new.test/a.png"])),
+      withImage,
+    );
   });
 
   section("Image storage failures");

@@ -34,6 +34,8 @@ import {
   type ImageProvider,
   buildJsonLd,
   markdownToHtml,
+  placeImages,
+  type PlacedImage,
 } from "@seo/shared";
 
 import { ingestImage } from "../api.js";
@@ -330,7 +332,7 @@ export async function runWriteArticle(
     /* 8 — assemble -------------------------------------------------------- */
     await report(8, TOTAL_STEPS, "Assembling the article");
 
-    const bodyWithImages = insertImages(bodyMdx, images);
+    const bodyWithImages = placeImages(bodyMdx, images);
     const wordCount = countWords(bodyWithImages);
     const slug = slugify(meta.slug || outline.title);
 
@@ -419,16 +421,6 @@ export async function runWriteArticle(
 
 /* -------------------------------------------------------------- images */
 
-type ResolvedImage = {
-  id: string;
-  role: "hero" | "inline";
-  position: number;
-  blobUrl: string;
-  altText: string;
-  caption: string | null;
-  placementHeading: string | null;
-};
-
 async function produceImages(params: {
   articleId: string;
   clientId: string;
@@ -439,7 +431,7 @@ async function produceImages(params: {
   inlineCount: number;
   styleReference: BrandAsset | null;
   report: StageReporter;
-}): Promise<ResolvedImage[]> {
+}): Promise<PlacedImage[]> {
   const assets = await loadBrandAssets(params.clientId);
   const provider = createImageProvider();
 
@@ -514,7 +506,7 @@ async function produceImages(params: {
   const CONCURRENCY = 3;
 
   let done = 0;
-  const settled = new Array<ResolvedImage | null>(ordered.length).fill(null);
+  const settled = new Array<PlacedImage | null>(ordered.length).fill(null);
 
   async function renderAt(index: number): Promise<void> {
     const spec = ordered[index];
@@ -588,7 +580,7 @@ async function produceImages(params: {
   );
 
   // Order is the plan's, not whichever finished first.
-  const resolved = settled.filter((image): image is ResolvedImage => image !== null);
+  const resolved = settled.filter((image): image is PlacedImage => image !== null);
 
   return resolved;
 }
@@ -640,59 +632,3 @@ async function generateAndStore(params: {
  * image immediately before the heading it was planned for. Anything whose
  * heading cannot be matched is appended rather than dropped.
  */
-function insertImages(bodyMdx: string, images: ResolvedImage[]): string {
-  if (images.length === 0) return bodyMdx;
-
-  const render = (image: ResolvedImage): string => {
-    const alt = image.altText.replace(/[[\]]/g, "");
-    const figure = `![${alt}](${image.blobUrl})`;
-    return image.caption ? `${figure}\n*${image.caption}*` : figure;
-  };
-
-  const lines = bodyMdx.split("\n");
-  const out: string[] = [];
-  const placed = new Set<string>();
-
-  const hero = images.find((i) => i.role === "hero");
-  const inline = images.filter((i) => i.role !== "hero");
-
-  let heroPlaced = false;
-
-  for (const line of lines) {
-    const headingMatch = /^(#{2,3})\s+(.*\S)\s*$/.exec(line);
-    if (headingMatch?.[2]) {
-      const heading = headingMatch[2].trim().toLowerCase();
-      for (const image of inline) {
-        if (placed.has(image.id)) continue;
-        if (image.placementHeading?.trim().toLowerCase() === heading) {
-          out.push(render(image), "");
-          placed.add(image.id);
-        }
-      }
-    }
-
-    out.push(line);
-
-    if (!heroPlaced && hero && /^#\s+/.test(line)) {
-      out.push("", render(hero));
-      placed.add(hero.id);
-      heroPlaced = true;
-    }
-  }
-
-  // Hero with no H1 to anchor to, or inline images whose heading was renamed
-  // during revision: keep them rather than silently losing paid-for renders.
-  const orphans = images.filter((i) => !placed.has(i.id));
-  if (orphans.length > 0) {
-    if (hero && !heroPlaced) {
-      out.unshift(render(hero), "");
-      placed.add(hero.id);
-    }
-    for (const image of orphans) {
-      if (placed.has(image.id)) continue;
-      out.push("", render(image));
-    }
-  }
-
-  return out.join("\n");
-}

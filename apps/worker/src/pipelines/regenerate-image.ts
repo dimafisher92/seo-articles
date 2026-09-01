@@ -1,7 +1,12 @@
 import { eq } from "drizzle-orm";
 
 import { articleImages, articles } from "@seo/db";
-import { imageSpecForRole, markdownToHtml } from "@seo/shared";
+import {
+  imageSpecForRole,
+  markdownToHtml,
+  reconcileImages,
+  type PlacedImage,
+} from "@seo/shared";
 
 import { ingestImage } from "../api.js";
 import { db, loadClient } from "../data.js";
@@ -88,16 +93,48 @@ export async function runRegenerateImage(
     })
     .where(eq(articleImages.id, image.id));
 
-  // A new Blob URL means the body's image reference has to follow it.
-  if (image.blobUrl && image.blobUrl !== stored.blobUrl) {
-    const [article] = await db()
-      .select({ bodyMdx: articles.bodyMdx })
-      .from(articles)
-      .where(eq(articles.id, input.articleId))
-      .limit(1);
+  /**
+   * Make the body agree with the images that now exist.
+   *
+   * This used to substitute the old URL for the new one, which quietly did
+   * nothing in the two cases that matter. When the previous generation failed
+   * the row had no URL to substitute, so a successful regeneration never
+   * reached the body. And when a Blob store was replaced, the body held URLs
+   * from a store that no longer existed — matching nothing, and rendering as
+   * broken images with the alt text showing.
+   *
+   * Reconciling against the table covers both: dead references go, live images
+   * are placed, and an image already in the right place is left alone.
+   */
+  const [article] = await db()
+    .select({ bodyMdx: articles.bodyMdx })
+    .from(articles)
+    .where(eq(articles.id, input.articleId))
+    .limit(1);
 
-    if (article?.bodyMdx) {
-      const bodyMdx = article.bodyMdx.split(image.blobUrl).join(stored.blobUrl);
+  if (article?.bodyMdx) {
+    const live = await db()
+      .select()
+      .from(articleImages)
+      .where(eq(articleImages.articleId, input.articleId));
+
+    const placed: PlacedImage[] = live
+      .filter((row) => row.status === "ready" && row.blobUrl)
+      .map((row) => ({
+        id: row.id,
+        role: row.role,
+        position: row.position,
+        blobUrl: row.blobUrl!,
+        // Alt text is required in the body; a row without it still gets
+        // placed, since a missing picture is worse than a missing description.
+        altText: row.altText ?? "",
+        caption: row.caption,
+        placementHeading: row.placementHeading,
+      }));
+
+    const bodyMdx = reconcileImages(article.bodyMdx, placed);
+
+    if (bodyMdx !== article.bodyMdx) {
       await db()
         .update(articles)
         .set({

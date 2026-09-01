@@ -138,22 +138,30 @@ export function PlanTable({
                   {status.label}
                 </Badge>
 
-                <div className="shrink-0">
-                  {item.articleId && item.status !== "queued" && item.status !== "generating" ? (
+                {/*
+                  Both actions, not one instead of the other. `articleId` is set
+                  the moment generation starts and never cleared, so keying the
+                  choice on it meant a row that had ever been generated showed
+                  only "Open article" — the retry inside WriteButton could not
+                  render even for a failed item.
+                */}
+                <div className="flex shrink-0 items-start gap-2">
+                  {item.articleId ? (
                     <Button variant="outline" size="sm" asChild>
                       <Link href={`/clients/${clientId}/articles/${item.articleId}`}>
                         <FileText />
                         Open article
                       </Link>
                     </Button>
-                  ) : (
-                    <WriteButton
-                      planItemId={item.id}
-                      status={item.status}
-                      imageMode={imageMode}
-                      inlineImageCount={inlineImages}
-                    />
-                  )}
+                  ) : null}
+
+                  <WriteButton
+                    planItemId={item.id}
+                    status={item.status}
+                    hasArticle={Boolean(item.articleId)}
+                    imageMode={imageMode}
+                    inlineImageCount={inlineImages}
+                  />
                 </div>
               </div>
 
@@ -234,11 +242,13 @@ function Detail({
 function WriteButton({
   planItemId,
   status,
+  hasArticle,
   imageMode,
   inlineImageCount,
 }: {
   planItemId: string;
   status: PlanItem["status"];
+  hasArticle: boolean;
   imageMode: ImageMode;
   inlineImageCount: number;
 }) {
@@ -247,14 +257,30 @@ function WriteButton({
   const [error, setError] = useState<string | null>(null);
 
   const busy = status === "queued" || status === "generating";
+  const label = status === "failed" ? "Retry" : hasArticle ? "Regenerate" : "Write article";
 
   return (
     <div className="flex flex-col items-end gap-1">
       <Button
         size="sm"
+        variant={hasArticle && status !== "failed" ? "ghost" : "default"}
         disabled={pending || busy}
         onClick={() =>
           startTransition(async () => {
+            // Regeneration overwrites an article that took the better part of
+            // an hour to produce, so it asks first. A retry has nothing to
+            // lose and does not.
+            if (
+              hasArticle &&
+              status !== "failed" &&
+              !window.confirm(
+                "Regenerate this article? The current text, metadata and images " +
+                  "are replaced, and generation takes a while.",
+              )
+            ) {
+              return;
+            }
+
             setError(null);
             const result = await writeArticle(planItemId, {
               imageMode,
@@ -266,7 +292,7 @@ function WriteButton({
         }
       >
         {pending || busy ? <Spinner /> : <PenLine />}
-        {status === "failed" ? "Retry" : "Write article"}
+        {label}
       </Button>
       {error ? (
         <p className="max-w-[220px] text-right text-xs text-destructive">
