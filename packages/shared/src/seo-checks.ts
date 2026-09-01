@@ -25,7 +25,47 @@ export type CheckInput = {
   imageCount?: number;
   imagesMissingAlt?: number;
   targetWordCount?: number | null;
+  /** @type values of the JSON-LD the article ships with. */
+  schemaTypes?: string[];
 };
+
+/**
+ * The tells from playbook §11, as patterns.
+ *
+ * A review found five instances of the same "nobody tells you this" move in one
+ * article and called it out in prose, where nothing acted on it. Counted here,
+ * it is a failing check the revision loop has to clear.
+ *
+ * Kept to constructions with no innocent reading: the point is to catch a habit
+ * repeated across an article, not to ban a turn of phrase used once.
+ */
+const MACHINE_TELLS: { label: string; pattern: RegExp }[] = [
+  {
+    label: "nobody-tells-you",
+    // "the part almost nobody reads", "what no advert explains"
+    pattern:
+      /\b(?:que|lo que|the part|the bit)?\s*(?:casi\s+)?(?:nadie|ningún|ninguna|no one|nobody|no ad|ningun)\b[^.!?\n]{0,60}\b(?:lee|explica|menciona|cuenta|muestra|tells|explains|mentions|shows)\b/gi,
+  },
+  {
+    label: "negative-parallelism",
+    // "not a lapse: it is the clause", "no es X, es Y"
+    pattern:
+      /\b(?:no es|not a|not an|it is not|isn['’]t|no son)\b[^.:;!?\n]{3,60}[:,]\s*(?:es|it is|it['’]s|son|sino)\b/gi,
+  },
+  {
+    label: "inflated-significance",
+    pattern:
+      /\b(?:la parte|el detalle|el hueco|the one thing|the detail)\b[^.!?\n]{0,40}\b(?:que casi nadie|que nadie|almost nobody|nobody)\b/gi,
+  },
+];
+
+/** Counts each tell, so the detail names the habit rather than a total. */
+export function findMachineTells(markdown: string): { label: string; count: number }[] {
+  return MACHINE_TELLS.map(({ label, pattern }) => ({
+    label,
+    count: (markdown.match(pattern) ?? []).length,
+  })).filter((tell) => tell.count > 0);
+}
 
 /** Google truncates around 580px; ~60 characters is the workable proxy. */
 export const TITLE_TAG_MAX = 60;
@@ -156,6 +196,18 @@ export function runSeoChecks(input: CheckInput): SeoScore {
     keyword ? containsKeyword(lead, keyword) : false,
   );
 
+  // An AI Overview lifts a sentence, not a paragraph. One article packed six
+  // claims and three statute references into its first sentence and was
+  // unliftable — the check that would have caught it did not exist.
+  const firstSentence = (lead.split(/(?<=[.!?])\s/)[0] ?? "").trim();
+  const firstSentenceWords = countWords(firstSentence);
+  add(
+    "opening-answer",
+    "Opens with an answer short enough to be quoted (≤40 words)",
+    firstSentenceWords > 0 && firstSentenceWords <= 40,
+    `${firstSentenceWords} words in the first sentence`,
+  );
+
   /* --- structure -------------------------------------------------------- */
 
   add(
@@ -165,12 +217,16 @@ export function runSeoChecks(input: CheckInput): SeoScore {
     `${h2s.length} H2 headings`,
   );
 
+  // The house rule is that an H2 is a question answered by the sentence under
+  // it. Requiring only one let five plain headings through in a seven-heading
+  // article; 70% leaves room for a closing section without licensing prose
+  // headings throughout.
   const questionH2s = h2s.filter((h) => h.text.includes("?")).length;
   add(
     "question-headings",
-    "At least one H2 phrased as a question (extractable passage)",
-    questionH2s >= 1,
-    `${questionH2s} question headings`,
+    "Most H2s are questions, each answered in the sentence below",
+    h2s.length === 0 || questionH2s / h2s.length >= 0.7,
+    `${questionH2s}/${h2s.length} are questions`,
   );
 
   const singleH1 = headings.filter((h) => h.level === 1).length <= 1;
@@ -235,11 +291,22 @@ export function runSeoChecks(input: CheckInput): SeoScore {
     `${input.externalSourceCount ?? 0} sources`,
   );
 
+  const faqCount = input.faqCount ?? 0;
   add(
     "faq-present",
     "Has an FAQ block for FAQPage schema",
-    (input.faqCount ?? 0) >= 3,
-    `${input.faqCount ?? 0} questions`,
+    faqCount >= 3,
+    `${faqCount} questions`,
+  );
+
+  // Seven FAQs on a 1,700-word piece duplicated the body almost verbatim.
+  // An FAQ that restates a section is not extra coverage, it is the same page
+  // twice.
+  add(
+    "faq-count",
+    "No more than 5 FAQ entries",
+    faqCount <= 5,
+    faqCount > 5 ? `${faqCount} — trim to the ones the body does not answer` : undefined,
   );
 
   add(
@@ -248,6 +315,31 @@ export function runSeoChecks(input: CheckInput): SeoScore {
     (input.imageCount ?? 0) >= 3,
     `${input.imageCount ?? 0} images`,
   );
+
+  const tells = findMachineTells(input.bodyMdx);
+  const tellCount = tells.reduce((sum, tell) => sum + tell.count, 0);
+  add(
+    "machine-tells",
+    "No repeated machine tells from the playbook",
+    tellCount === 0,
+    tells.length > 0
+      ? tells.map((tell) => `${tell.label} ×${tell.count}`).join(", ")
+      : undefined,
+  );
+
+  // The JSON-LD is built and stored; nothing checked it was built, so an
+  // article could ship with none and pass every structural check.
+  const schemaTypes = input.schemaTypes;
+  if (schemaTypes !== undefined) {
+    const required = ["BlogPosting", "BreadcrumbList"];
+    const missing = required.filter((type) => !schemaTypes.includes(type));
+    add(
+      "structured-data",
+      "Ships BlogPosting and BreadcrumbList schema",
+      missing.length === 0,
+      missing.length > 0 ? `missing ${missing.join(", ")}` : schemaTypes.join(", "),
+    );
+  }
 
   add(
     "image-alt",

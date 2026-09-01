@@ -90,11 +90,15 @@ export default async function ArticlesPage({
                         ? "success"
                         : article.status === "exported"
                           ? "secondary"
-                          : "outline"
+                          : article.status === "needs_attention"
+                            ? "destructive"
+                            : "outline"
                     }
                     className="shrink-0"
                   >
-                    {article.status}
+                    {article.status === "needs_attention"
+                      ? "needs attention"
+                      : article.status}
                   </Badge>
                 </Link>
               </li>

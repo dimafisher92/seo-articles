@@ -23,6 +23,9 @@ import {
   imageSpecForRole,
   readingTimeMinutes,
   runSeoChecks,
+  gateDraft,
+  statusAfterReview,
+  type QaIssue,
   slugify,
   truncate,
   TITLE_TAG_MAX,
@@ -159,56 +162,100 @@ export async function runWriteArticle(
       { schema: draftSchema, label: "draft", maxTurns: 6, timeoutMs: 25 * 60_000 },
     );
 
-    /* 4 — QA -------------------------------------------------------------- */
-    await report(4, TOTAL_STEPS, "Reviewing against the playbook");
+    /* 4-5 — review and revise, until it is actually clean ----------------- */
 
-    const preChecks = runSeoChecks({
-      title: outline.title,
-      titleTag: outline.titleTag,
-      bodyMdx: draft.bodyMdx,
-      mainKeyword: planItem.mainKeyword,
-      secondaryKeywords: planItem.secondaryKeywords,
-      faqCount: outline.faq.length,
-      internalLinkCount: draft.internalLinks.length,
-      externalSourceCount: draft.externalSources.length,
-      // Images are added after the QA pass; excluded so their checks do not
-      // dominate the model's revision instructions.
-      imageCount: 3,
-      imagesMissingAlt: 0,
-      targetWordCount: planItem.targetWordCount,
-    });
+    /**
+     * The loop this replaces asked the model whether to revise and believed
+     * the answer. One article came back with six findings marked `high` —
+     * invented fee percentages, claims about the client's own contract,
+     * unsourced attacks on competitors — a verdict of "ship", and was
+     * published verbatim. Nothing re-checked the result of a revision either,
+     * so even a revised draft shipped unverified.
+     *
+     * Three passes: enough for a draft with real problems to converge, few
+     * enough that a hopeless one does not burn tokens indefinitely.
+     */
+    const MAX_REVIEW_PASSES = 3;
 
-    const qa = await runStageWithRetry<QaOutput>(
-      qaPrompt(
-        brand,
-        brief,
-        draft.bodyMdx,
-        preChecks.checks.filter((c) => !c.passed),
-        playbook,
-      ),
-      { schema: qaSchema, label: "qa", maxTurns: 4, timeoutMs: 15 * 60_000 },
-    );
-
-    /* 5 — revise ---------------------------------------------------------- */
     let bodyMdx = draft.bodyMdx;
     let appliedFixes: string[] = [];
+    let issues: QaIssue[] = [];
+    let blocking: QaIssue[] = [];
 
-    if (qa.verdict === "revise" && qa.instructions.length > 0) {
+    for (let pass = 1; pass <= MAX_REVIEW_PASSES; pass++) {
+      await report(
+        4,
+        TOTAL_STEPS,
+        "Reviewing against the playbook",
+        `pass ${pass} of ${MAX_REVIEW_PASSES}`,
+      );
+
+      const checks = runSeoChecks({
+        title: outline.title,
+        titleTag: outline.titleTag,
+        bodyMdx,
+        mainKeyword: planItem.mainKeyword,
+        secondaryKeywords: planItem.secondaryKeywords,
+        faqCount: outline.faq.length,
+        internalLinkCount: draft.internalLinks.length,
+        externalSourceCount: draft.externalSources.length,
+        // Images are added after review; excluded so their checks do not
+        // dominate the revision instructions.
+        imageCount: 3,
+        imagesMissingAlt: 0,
+        targetWordCount: planItem.targetWordCount,
+      });
+
+      const failed = checks.checks.filter((check) => !check.passed);
+
+      const qa = await runStageWithRetry<QaOutput>(
+        qaPrompt(brand, brief, bodyMdx, failed, playbook),
+        { schema: qaSchema, label: `qa-${pass}`, maxTurns: 4, timeoutMs: 15 * 60_000 },
+      );
+
+      issues = qa.issues;
+
+      const gate = gateDraft({
+        verdict: qa.verdict,
+        issues: qa.issues,
+        failedCheckIds: failed.map((check) => check.id),
+      });
+      blocking = gate.blocking;
+
+      if (!gate.mustRevise) {
+        log.info(`Review pass ${pass}: clean`);
+        break;
+      }
+
+      log.info(`Review pass ${pass}: ${gate.reason}`);
+
+      if (pass === MAX_REVIEW_PASSES) {
+        // Out of passes. The article is kept in full — status says what it is.
+        log.warn(
+          `Still not clean after ${MAX_REVIEW_PASSES} passes: ${gate.reason}`,
+        );
+        break;
+      }
+
+      if (qa.instructions.length === 0) {
+        log.warn("Review demanded a revision but gave no instructions");
+        break;
+      }
+
       await report(
         5,
         TOTAL_STEPS,
         "Applying revisions",
-        `${qa.instructions.length} instructions`,
+        `${qa.instructions.length} instructions, pass ${pass}`,
       );
 
       const revised = await runStageWithRetry<ReviseOutput>(
-        revisePrompt(brand, draft.bodyMdx, qa.instructions, playbook),
-        { schema: reviseSchema, label: "revise", maxTurns: 6, timeoutMs: 25 * 60_000 },
+        revisePrompt(brand, bodyMdx, qa.instructions, playbook),
+        { schema: reviseSchema, label: `revise-${pass}`, maxTurns: 6, timeoutMs: 25 * 60_000 },
       );
+
       bodyMdx = revised.bodyMdx;
-      appliedFixes = revised.appliedFixes;
-    } else {
-      await report(5, TOTAL_STEPS, "Draft passed review");
+      appliedFixes = [...appliedFixes, ...revised.appliedFixes];
     }
 
     /* 6 — metadata -------------------------------------------------------- */
@@ -241,6 +288,19 @@ export async function runWriteArticle(
     const wordCount = countWords(bodyWithImages);
     const slug = slugify(meta.slug || outline.title);
 
+    const heroUrl = images.find((i) => i.role === "hero")?.blobUrl;
+
+    const jsonLd = buildJsonLd({
+      title: outline.title,
+      description: meta.metaDescription,
+      slug,
+      domain: loaded.client.domain,
+      author: brand.authorPersona,
+      faq: meta.faq,
+      ...(heroUrl ? { imageUrl: heroUrl } : {}),
+      publisherName: loaded.client.name,
+    });
+
     const finalChecks = runSeoChecks({
       title: outline.title,
       titleTag: meta.titleTag,
@@ -255,20 +315,12 @@ export async function runWriteArticle(
       imageCount: images.length,
       imagesMissingAlt: images.filter((i) => !i.altText).length,
       targetWordCount: planItem.targetWordCount,
+      // Built just above; checked rather than assumed, because it is stored
+      // whatever it contains and nothing else looks at it.
+      schemaTypes: jsonLd.map((block) => (block as { "@type": string })["@type"]),
     });
 
-    const heroUrl = images.find((i) => i.role === "hero")?.blobUrl;
 
-    const jsonLd = buildJsonLd({
-      title: outline.title,
-      description: meta.metaDescription,
-      slug,
-      domain: loaded.client.domain,
-      author: brand.authorPersona,
-      faq: meta.faq,
-      ...(heroUrl ? { imageUrl: heroUrl } : {}),
-      publisherName: loaded.client.name,
-    });
 
     await db()
       .update(articles)
@@ -289,8 +341,8 @@ export async function runWriteArticle(
         wordCount,
         readingTimeMinutes: readingTimeMinutes(wordCount),
         seoScore: finalChecks,
-        qaReport: { issues: qa.issues, appliedFixes },
-        status: "draft",
+        qaReport: { issues, appliedFixes },
+        status: statusAfterReview(blocking),
         updatedAt: new Date(),
       })
       .where(eq(articles.id, input.articleId));
@@ -305,7 +357,10 @@ export async function runWriteArticle(
       seoScore: finalChecks.total,
       images: images.length,
       failedChecks: finalChecks.checks.filter((c) => !c.passed).map((c) => c.id),
-      qaVerdict: qa.verdict,
+      // What the review still objects to, if anything — the job result is
+      // where a caller looks to know whether the article needs reading.
+      blockingIssues: blocking.length,
+      status: statusAfterReview(blocking),
     };
   } catch (error) {
     await db()

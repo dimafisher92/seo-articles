@@ -482,8 +482,16 @@ Judge:
 3. **Substance** — is any section padding? Which paragraphs survive deletion without loss?
 4. **Machine tells** — quote every phrase matching playbook section 11.
 5. **Accuracy** — any statistic, date, price or claim presented as fact without an attributable source.
-6. **Brand fit** — wrong tone, banned words, brand terms misspelled, claims the client cannot make.
-7. **Extraction** — could an AI Overview lift a clean answer from the opening? From each H2?
+6. **Entitlement to the claim** — playbook section 12, and mark every one of these \`high\`:
+   - any fee, guarantee, result or term stated about the client that the Brand Vault does not contain;
+   - any statement about the client's own contract, including no-win-no-fee phrasing;
+   - any claim of fact about competitors, or about what happens to the audience, without a named source;
+   - any number without a Brand Vault entry or a link;
+   - a citation pointing at a summary where the primary text exists.
+7. **Brand fit** — wrong tone, banned words, brand terms misspelled.
+8. **Extraction** — could an AI Overview lift a clean answer from the opening? From each H2?
+
+\`verdict\` is advisory — the pipeline decides from the findings, and a \`high\` forces a revision whatever the verdict says. Rate honestly rather than tactically.
 
 Return JSON only:
 {"verdict": "ship" | "revise",

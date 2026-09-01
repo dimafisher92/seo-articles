@@ -7,6 +7,7 @@ import { listBrandAssets } from "@/app/actions/brand-vault";
 import { ArticleEditor } from "@/components/article-editor";
 import { ClientJobBanner } from "@/components/client-job-banner";
 import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
 
 export const dynamic = "force-dynamic";
 
@@ -41,9 +42,17 @@ export default async function ArticlePage({
             {article.title}
           </h1>
           <Badge
-            variant={article.status === "approved" ? "success" : "outline"}
+            variant={
+              article.status === "approved"
+                ? "success"
+                : article.status === "needs_attention"
+                  ? "destructive"
+                  : "outline"
+            }
           >
-            {article.status}
+            {article.status === "needs_attention"
+              ? "needs attention"
+              : article.status}
           </Badge>
           {article.mainKeyword ? (
             <span className="text-sm text-muted-foreground">
@@ -52,6 +61,30 @@ export default async function ArticlePage({
           ) : null}
         </div>
       </div>
+
+      {article.status === "needs_attention" ? (
+        <Card className="mb-5 border-destructive/40 bg-destructive/5">
+          <CardContent className="space-y-2 pt-5">
+            <p className="text-sm font-medium text-destructive">
+              The review still objects to this article
+            </p>
+            <p className="text-sm text-muted-foreground">
+              Everything is saved, but these were not resolved after three
+              revision passes. Read them before publishing — invented figures
+              and claims about the client&apos;s own terms are the usual causes.
+            </p>
+            <ul className="space-y-1.5 pt-1">
+              {(article.qaReport?.issues ?? [])
+                .filter((issue) => issue.severity === "high")
+                .map((issue, index) => (
+                  <li key={index} className="text-sm">
+                    {issue.note}
+                  </li>
+                ))}
+            </ul>
+          </CardContent>
+        </Card>
+      ) : null}
 
       <ClientJobBanner
         clientId={id}

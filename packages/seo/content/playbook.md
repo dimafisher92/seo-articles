@@ -45,9 +45,17 @@ Every rule below serves at least one of those three.
 
 ## 4. Write for extraction
 
+An H2 is a question, and the sentence directly under it is the answer. Not a
+label, not a teaser — the question a reader would type, answered before any
+elaboration. A heading like "A $90,000 settlement: the subtraction no advert
+shows you" answers nothing and cannot be lifted; "How does the contract change
+what you actually receive?" can.
+
+The opening sentence of the article is the one an AI Overview quotes. Keep it
+under forty words and make it answer the title. Six claims and three statutory
+references in one sentence is not a strong opening, it is an unliftable one.
+
 - Paragraphs of 2-4 sentences. Nothing over 120 words.
-- Phrase several H2s as the questions people actually type. Answer each one in
-  the first sentence beneath it.
 - Put discrete facts — specs, prices, steps, criteria — in tables or lists, not
   buried in prose.
 - Each section should stand alone. A reader arriving from a jump link should not
@@ -147,7 +155,43 @@ paragraph of uniformly medium sentences reads as machine-made even when every
 sentence is fine on its own. Cut any sentence that survives deletion without
 loss of meaning.
 
-## 12. Freshness
+## 12. Claims you are not entitled to make
+
+Every rule below was broken by a real article before it was written down. They
+are absolute: a piece that breaks one is held back, however good the rest is.
+
+**Nothing about the client that is not in the Brand Vault.** Fee percentages,
+guarantees, response times, case results, years in business. An article invented
+a fee ladder — "33⅓% before filing, around 40% in litigation, up to 45% on
+appeal" — where the Vault said "25% to 40%". The number was plausible, specific,
+and made up, which is the worst combination: nobody rereads a figure that looks
+researched. If the Vault does not say it, the article does not either. Write
+around the gap or leave the sentence out.
+
+**No statement about the client's own contract or terms.** "If we do not win,
+you do not pay" is a claim about a document you have not read. Where a fee
+arrangement is regulated — legal, medical, financial — a claim of no-cost
+service must also address what the client owes for expenses, and an article that
+implies otherwise while criticising rivals for the same silence is worse than
+one that stays quiet.
+
+**No claims of fact about competitors, and none about the audience.** "Many
+Spanish-language adverts are lead-capture networks that hand the case to another
+firm." "It happens to Spanish-speaking victims more than anyone." Either cite a
+source or delete the sentence. Vague attribution — *many*, *most*, *studies
+show* — is not a source. This is both a credibility rule and, in regulated
+sectors, a legal one.
+
+**Every number carries its source.** Statistics, dates, prices, statutory
+limits, percentages. Either it is in the Brand Vault, or it has a link to where
+it came from. A number with neither is removed, not softened.
+
+**Cite the primary text, not a summary of it.** A rule of professional conduct
+links to the bar association's own text, not to a law firm's blog about it. A
+statute links to the statute. If a consumer guide is easier to read, link the
+statute and say what it means in your own words.
+
+## 13. Freshness
 
 - Reference the current year only when the content is genuinely time-sensitive.
 - Never claim data is current unless it was verified in this run.

@@ -35,6 +35,9 @@ import {
   markdownToHtml,
   normaliseDomain,
   runSeoChecks,
+  findMachineTells,
+  gateDraft,
+  statusAfterReview,
   ASPECT_RATIOS,
   imageSpecForRole,
   scoreKeyword,
@@ -357,6 +360,163 @@ async function pureTests(): Promise<void> {
     assert.equal(check?.passed, false);
   });
 
+  section("New on-page checks");
+
+  const bodyWith = (extra: string): string =>
+    `# T\n\nEl contrato decide su cheque. Pregunte el porcentaje antes de firmar.\n\n${extra}`;
+
+  await test("an opening sentence too long to quote fails", () => {
+    const packed =
+      "El contrato de cuota de contingencia fija un porcentaje que sube al " +
+      "entrar en litigio, y además el gravamen hospitalario, la sección 55.004 " +
+      "del Código de Propiedad, la sección 82.065 y la Regla 1.04(d) cambian " +
+      "por completo la cantidad neta que usted recibe al final del proceso.";
+    const checks = runSeoChecks({ title: "T", bodyMdx: `# T\n\n${packed}` });
+    const check = checks.checks.find((c) => c.id === "opening-answer");
+    assert.equal(check?.passed, false, "a 50-word opening should fail");
+  });
+
+  await test("a short answer-first opening passes", () => {
+    const checks = runSeoChecks({ title: "T", bodyMdx: bodyWith("") });
+    assert.equal(
+      checks.checks.find((c) => c.id === "opening-answer")?.passed,
+      true,
+    );
+  });
+
+  await test("mostly non-question H2s fail the house rule", () => {
+    // One question in seven used to pass; the rule is that H2s are questions.
+    const headings = [
+      "## Un acuerdo de $90,000",
+      "## Las 9 preguntas",
+      "## Lo que sí es igual",
+      "## Cómo verificar al bufete",
+      "## ¿Cuánto cobra un abogado?",
+    ].join("\n\nTexto.\n\n");
+    const checks = runSeoChecks({ title: "T", bodyMdx: bodyWith(headings) });
+    const check = checks.checks.find((c) => c.id === "question-headings");
+    assert.equal(check?.passed, false);
+    assert.match(check?.detail ?? "", /1\/5/);
+  });
+
+  await test("seven FAQ entries is over-servicing", () => {
+    const checks = runSeoChecks({ title: "T", bodyMdx: bodyWith(""), faqCount: 7 });
+    assert.equal(checks.checks.find((c) => c.id === "faq-count")?.passed, false);
+    assert.equal(checks.checks.find((c) => c.id === "faq-present")?.passed, true);
+  });
+
+  await test("missing structured data is caught", () => {
+    const withNone = runSeoChecks({
+      title: "T",
+      bodyMdx: bodyWith(""),
+      schemaTypes: [],
+    });
+    assert.equal(
+      withNone.checks.find((c) => c.id === "structured-data")?.passed,
+      false,
+    );
+
+    const withBoth = runSeoChecks({
+      title: "T",
+      bodyMdx: bodyWith(""),
+      schemaTypes: ["BlogPosting", "FAQPage", "BreadcrumbList"],
+    });
+    assert.equal(
+      withBoth.checks.find((c) => c.id === "structured-data")?.passed,
+      true,
+    );
+  });
+
+  await test("machine tells surface as a failing check", () => {
+    const checks = runSeoChecks({
+      title: "T",
+      bodyMdx: bodyWith("Es la parte que casi nadie lee."),
+    });
+    assert.equal(checks.checks.find((c) => c.id === "machine-tells")?.passed, false);
+  });
+
+  section("QA gate");
+
+  await test("a high finding forces a revision even on a ship verdict", () => {
+    // Exactly what happened: six high findings, verdict "ship", published.
+    const decision = gateDraft({
+      verdict: "ship",
+      issues: [
+        { severity: "high", note: "invented fee ladder: 33⅓% / 40% / 45%" },
+        { severity: "low", note: "register slips in one place" },
+      ],
+      failedCheckIds: [],
+    });
+    assert.equal(decision.mustRevise, true);
+    assert.equal(decision.blocking.length, 1);
+    assert.match(decision.reason, /1 high-severity finding/);
+  });
+
+  await test("a failed writing check forces a revision on its own", () => {
+    const decision = gateDraft({
+      verdict: "ship",
+      issues: [],
+      failedCheckIds: ["word-count", "question-headings"],
+    });
+    assert.equal(decision.mustRevise, true);
+    assert.match(decision.reason, /word-count/);
+  });
+
+  await test("a missing image does not hold prose hostage", () => {
+    // Images are generated after review, so image-count always fails there.
+    // Looping on it would spend passes rewriting text over a missing picture.
+    const decision = gateDraft({
+      verdict: "ship",
+      issues: [{ severity: "medium", note: "could be tighter" }],
+      failedCheckIds: ["image-count", "image-alt"],
+    });
+    assert.equal(decision.mustRevise, false);
+  });
+
+  await test("the review may still ask for a pass when nothing objective failed", () => {
+    assert.equal(
+      gateDraft({ verdict: "revise", issues: [], failedCheckIds: [] }).mustRevise,
+      true,
+    );
+  });
+
+  await test("unresolved high findings change the article's status", () => {
+    assert.equal(statusAfterReview([{ severity: "high", note: "x" }]), "needs_attention");
+    assert.equal(statusAfterReview([]), "draft");
+  });
+
+  section("Machine tells");
+
+  await test("the repeated 'nobody tells you' move is counted", () => {
+    // Five instances of one trope in a single article, quoted by the review
+    // and acted on by nothing.
+    const body = [
+      "Es la parte que casi nadie lee.",
+      "La resta que ningún anuncio le muestra.",
+      "Un riesgo que nadie explica.",
+    ].join("\n\n");
+    const tells = findMachineTells(body);
+    const total = tells.reduce((sum, tell) => sum + tell.count, 0);
+    assert.ok(total >= 3, `expected at least 3 tells, found ${total}`);
+  });
+
+  await test("negative parallelism is counted", () => {
+    const tells = findMachineTells(
+      "No es un descuido menor: es la cláusula que decide su cheque.",
+    );
+    assert.ok(tells.some((tell) => tell.label === "negative-parallelism"));
+  });
+
+  await test("ordinary prose is not flagged", () => {
+    assert.deepEqual(
+      findMachineTells(
+        "El contrato fija el porcentaje antes de presentar la demanda. " +
+          "Pregunte cuál aplica en su caso.",
+      ),
+      [],
+    );
+  });
+
   section("Aspect ratios");
 
   await test("every aspect ratio has a Magnific name", () => {
@@ -459,14 +619,16 @@ async function pureTests(): Promise<void> {
     assert.equal(mystic.reference_images, undefined, "wrong field for this model");
   });
 
-  await test("resolution is upper-cased for the API", () => {
+  await test("the request body speaks Magnific's vocabulary", () => {
     const body = MODELS[DEFAULT_MODEL]?.buildBody({
       prompt: "x",
       aspectRatio: "16:9",
       resolution: "2k",
     }) as { resolution?: string; aspect_ratio?: string };
     assert.equal(body.resolution, "2K");
-    assert.equal(body.aspect_ratio, "16:9");
+    // This assertion used to expect "16:9", which is what Magnific rejects —
+    // the test was holding the bug in place.
+    assert.equal(body.aspect_ratio, "widescreen_16_9");
   });
 
   await test("the auth header follows the host", () => {

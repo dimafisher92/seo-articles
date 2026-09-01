@@ -58,6 +58,14 @@ export const planItemStatusEnum = pgEnum("plan_item_status", [
 ]);
 
 export const articleStatusEnum = pgEnum("article_status", [
+  /**
+   * Generated, reviewed, and something the review flagged as serious is still
+   * in the text. Everything is saved — body, metadata, images — but it is not
+   * a draft anyone should publish without reading the findings first.
+   *
+   * Ordered before "draft" so a status comparison reads worst-first.
+   */
+  "needs_attention",
   "draft",
   "approved",
   "exported",
