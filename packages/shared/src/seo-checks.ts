@@ -1,4 +1,7 @@
-import { stripFrontMatter } from "./render/markdown.js";
+import {
+  findAuthoredHtml,
+  stripFrontMatter,
+} from "./render/markdown.js";
 import type { SeoCheck, SeoScore } from "./types.js";
 
 /**
@@ -341,6 +344,20 @@ export function runSeoChecks(input: CheckInput): SeoScore {
       missing.length > 0 ? `missing ${missing.join(", ")}` : schemaTypes.join(", "),
     );
   }
+
+  // The pipeline strips this before anything measures it, so here the check is
+  // for the bodies that never went through it: articles generated before the
+  // strip existed, and anything typed into the editor. Reporting beats hiding —
+  // an `<img>` the pipeline did not place points at a file that does not exist.
+  const authoredHtml = findAuthoredHtml(input.bodyMdx);
+  add(
+    "authored-html",
+    "No raw HTML in the body",
+    authoredHtml.length === 0,
+    authoredHtml.length > 0
+      ? `${authoredHtml.join(", ")} — images, metadata and schema are produced by the pipeline`
+      : undefined,
+  );
 
   add(
     "image-alt",

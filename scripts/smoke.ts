@@ -36,6 +36,8 @@ import {
   normaliseDomain,
   runSeoChecks,
   reconcileImages,
+  stripAuthoredHtml,
+  findAuthoredHtml,
   stripFrontMatter,
   stripUnknownImages,
   type PlacedImage,
@@ -1092,6 +1094,144 @@ async function pureTests(): Promise<void> {
       detail(FRONT_MATTER_BODY),
       detail(stripFrontMatter(FRONT_MATTER_BODY)),
     );
+  });
+
+  console.log("\nHTML the draft had no business writing");
+
+  // Verbatim from an exported article: three <img> tags at paths that exist
+  // nowhere, the on-page mechanics comment that hid the meta description, and
+  // the JSON-LD block the pipeline builds for itself.
+  const AUTHORED_HTML_BODY = [
+    "# Antes de Firmar el Contrato",
+    "",
+    "![Un cliente y una abogada revisan un contrato](https://blob.example.com/articles/a/hero.jpg)",
+    "",
+    "Antes de firmar, confirme la licencia por escrito.",
+    "",
+    '<img src="/img/preguntas-antes-firmar.webp" alt="Un cliente y una abogada" width="1600" height="900" loading="eager" />',
+    "",
+    "## ¿Qué preguntas debe hacerle?",
+    "",
+    "Las tres de mayor peso son la licencia, el porcentaje y los gastos.",
+    "",
+    "<!-- MECÁNICA ON-PAGE (no publicar como texto visible)",
+    "Slug (45 caracteres): preguntas-abogado-lesiones-personales-houston",
+    "Meta description (142 caracteres): Antes de contratar…",
+    "-->",
+    "",
+    '<script type="application/ld+json">',
+    '{ "@type": "BlogPosting" }',
+    "</script>",
+  ].join("\n");
+
+  await test("the invented <img> tags are gone", () => {
+    const cleaned = stripAuthoredHtml(AUTHORED_HTML_BODY);
+    assert.ok(!/<img/i.test(cleaned));
+    // The real image, in Markdown, is untouched.
+    assert.ok(cleaned.includes("https://blob.example.com/articles/a/hero.jpg"));
+  });
+
+  await test("the comment that hid the meta description is gone", () => {
+    const cleaned = stripAuthoredHtml(AUTHORED_HTML_BODY);
+    assert.ok(!cleaned.includes("<!--"));
+    assert.ok(!cleaned.includes("MECÁNICA ON-PAGE"));
+  });
+
+  await test("a script block never reaches the rendered body", () => {
+    // markdownToHtml passes raw HTML through and the result is injected with
+    // dangerouslySetInnerHTML, so this is the path that matters.
+    assert.ok(markdownToHtml(AUTHORED_HTML_BODY).includes("<script"));
+    assert.ok(
+      !markdownToHtml(stripAuthoredHtml(AUTHORED_HTML_BODY)).includes("<script"),
+    );
+  });
+
+  await test("an unterminated script block does not survive on a technicality", () => {
+    const cleaned = stripAuthoredHtml('# Title\n\n<script>\nalert(1)\n');
+    assert.ok(!/<script/i.test(cleaned));
+  });
+
+  await test("prose and Markdown are left alone", () => {
+    const body = "# Title\n\nOne < two, and 3 > 2.\n\n![alt](https://x/y.jpg)\n";
+    assert.equal(stripAuthoredHtml(body), body.trim());
+  });
+
+  await test("cleaning twice changes nothing the second time", () => {
+    const once = stripAuthoredHtml(AUTHORED_HTML_BODY);
+    assert.equal(stripAuthoredHtml(once), once);
+  });
+
+  await test("the check names what it found, and passes once cleaned", () => {
+    assert.deepEqual(findAuthoredHtml(AUTHORED_HTML_BODY), [
+      "<img>",
+      "<script>",
+      "HTML comment",
+    ]);
+    assert.deepEqual(findAuthoredHtml(stripAuthoredHtml(AUTHORED_HTML_BODY)), []);
+  });
+
+  await test("an existing article reports its raw HTML rather than hiding it", () => {
+    const input = {
+      title: "Antes de Firmar el Contrato",
+      titleTag: "Abogado de Lesiones Personales Houston: 12 Preguntas",
+      metaDescription: "Antes de contratar a un abogado en Houston, confirme la licencia.",
+      slug: "preguntas-abogado-lesiones-personales-houston",
+      mainKeyword: "abogado de lesiones personales houston",
+      secondaryKeywords: [],
+      faqCount: 3,
+      internalLinkCount: 2,
+      externalSourceCount: 2,
+      imageCount: 3,
+      imagesMissingAlt: 0,
+      targetWordCount: null,
+    };
+
+    const passes = (bodyMdx: string): boolean =>
+      runSeoChecks({ ...input, bodyMdx }).checks.find(
+        (c) => c.id === "authored-html",
+      )?.passed ?? false;
+
+    assert.equal(passes(AUTHORED_HTML_BODY), false);
+    assert.equal(passes(stripAuthoredHtml(AUTHORED_HTML_BODY)), true);
+  });
+
+  await test("raw HTML holds an article back rather than scoring it down", () => {
+    const decision = gateDraft({
+      verdict: "ship",
+      issues: [],
+      failedCheckIds: ["authored-html"],
+    });
+    assert.equal(decision.mustRevise, true);
+  });
+
+  await test("an invented Markdown image is reconciled out of the body", () => {
+    // The same failure in the syntax the pipeline does understand: assembly
+    // used to only add what was missing, so a URL the draft made up stayed.
+    const body = [
+      "# Title",
+      "",
+      "![made up](https://blob.example.com/articles/a/ghost.jpg)",
+      "",
+      "## What is it?",
+      "",
+      "An answer.",
+    ].join("\n");
+
+    const live: PlacedImage[] = [
+      {
+        id: "img-1",
+        role: "hero",
+        position: 0,
+        blobUrl: "https://blob.example.com/articles/a/real.jpg",
+        altText: "The real one",
+        caption: null,
+        placementHeading: null,
+      },
+    ];
+
+    const out = reconcileImages(body, live);
+    assert.ok(!out.includes("ghost.jpg"));
+    assert.ok(out.includes("real.jpg"));
   });
 
   console.log("\nRegenerating an article");

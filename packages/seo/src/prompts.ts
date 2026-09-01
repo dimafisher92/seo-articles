@@ -382,7 +382,8 @@ Hard requirements:
 - Include the internal links to the client's money pages, with descriptive anchors, placed where a reader would actually want them.
 - Include at least one table or structured list where it genuinely helps.
 - End with the FAQ section as H2 "Frequently Asked Questions", each question an H3.
-- Do NOT insert image markdown. Images are placed in a later stage.
+- Return Markdown only. No raw HTML anywhere in the body: no \`<img>\`, no \`<script>\`, no \`<style>\`, no HTML comments, and no invented file paths like \`/img/something.webp\`.
+- Do NOT insert images in any syntax, do NOT write a JSON-LD block, and do NOT write the title tag, slug or meta description into the body — even inside a comment. Images, schema and metadata are produced by later stages, and anything you write here is either deleted or published as visible text.
 - Do NOT invent statistics, prices, dates, quotes or study findings.
 
 Re-read section 11 of the playbook before you write, and again before you finish. The single fastest way to fail this task is to write competent, generic, machine-sounding prose.
@@ -535,7 +536,7 @@ While you are in there, do a final pass against playbook section 11: strip infla
 
 Preserve: the heading structure, the internal and external links, the FAQ section, and every factual claim that was properly sourced. Do not shorten the article to avoid the work — fix the prose, keep the substance.
 
-Return the body only. The first line is the H1 — no YAML front matter and no \`---\` block above it.
+Return the body only, in Markdown. The first line is the H1 — no YAML front matter and no \`---\` block above it, and no raw HTML anywhere: no \`<img>\`, no \`<script>\`, no \`<style>\`, no HTML comments. If the draft you were given contains any of that, drop it; images, schema and metadata belong to other stages.
 
 Return JSON only:
 {"bodyMdx": "the complete revised article in Markdown", "appliedFixes": ["what you changed"]}`;

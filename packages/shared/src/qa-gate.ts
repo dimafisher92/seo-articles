@@ -62,6 +62,7 @@ const BLOCKING_CHECK_IDS = new Set([
   "faq-count",
   "opening-answer",
   "machine-tells",
+  "authored-html",
 ]);
 
 export function gateDraft(input: GateInput): GateDecision {

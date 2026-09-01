@@ -34,7 +34,8 @@ import {
   type ImageProvider,
   buildJsonLd,
   markdownToHtml,
-  placeImages,
+  reconcileImages,
+  stripAuthoredHtml,
   stripFrontMatter,
   type PlacedImage,
 } from "@seo/shared";
@@ -78,6 +79,11 @@ export type WriteArticleInput = {
   imageMode: ImageMode;
   inlineImageCount: number;
 };
+
+/** Everything a stage may not put in the body, removed in one place. */
+function cleanBody(bodyMdx: string): string {
+  return stripAuthoredHtml(stripFrontMatter(bodyMdx));
+}
 
 /**
  * The full article pipeline.
@@ -197,10 +203,12 @@ export async function runWriteArticle(
      */
     const MAX_REVIEW_PASSES = 3;
 
-    // A body opening on YAML front matter renders as `title: "…"` above the H1
-    // in the preview and in every export. The draft prompt forbids it and a
-    // draft arrived with it anyway, so it is dropped rather than trusted.
-    let bodyMdx = stripFrontMatter(draft.bodyMdx);
+    // Two things the prompt forbids and a draft delivered anyway: YAML front
+    // matter above the H1, and a whole HTML apparatus — `<img>` tags at
+    // invented paths, an on-page-mechanics comment, a JSON-LD `<script>`. Each
+    // is something a later stage produces for real, so it is dropped here,
+    // before anything measures or renders it.
+    let bodyMdx = cleanBody(draft.bodyMdx);
     let appliedFixes: string[] = [];
     let issues: QaIssue[] = [];
     let blocking: QaIssue[] = [];
@@ -303,7 +311,7 @@ export async function runWriteArticle(
         },
       );
 
-      bodyMdx = stripFrontMatter(revised.bodyMdx);
+      bodyMdx = cleanBody(revised.bodyMdx);
       appliedFixes = [...appliedFixes, ...revised.appliedFixes];
     }
 
@@ -339,7 +347,10 @@ export async function runWriteArticle(
     /* 8 — assemble -------------------------------------------------------- */
     await report(8, TOTAL_STEPS, "Assembling the article");
 
-    const bodyWithImages = placeImages(bodyMdx, images);
+    // Reconcile rather than only place: a draft that invents `![alt](url)` as
+    // well would otherwise ship a Markdown image pointing nowhere. This is the
+    // same operation regeneration performs, which is why it is shared.
+    const bodyWithImages = reconcileImages(bodyMdx, images);
     const wordCount = countWords(bodyWithImages);
     const slug = slugify(meta.slug || outline.title);
 

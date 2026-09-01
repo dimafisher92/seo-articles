@@ -51,6 +51,52 @@ export function stripFrontMatter(markdown: string): string {
 }
 
 /**
+ * Removes HTML the draft stage had no business writing.
+ *
+ * A draft came back as an agency deliverable rather than a body: three
+ * `<img src="/img/….webp">` tags at paths that exist nowhere, an
+ * "on-page mechanics" HTML comment carrying the title tag, slug and meta
+ * description, and a `<script type="application/ld+json">` block. Every one of
+ * those duplicates a later stage — `produceImages`, the meta stage,
+ * `buildJsonLd` — so none of it is content, and all of it outranked the real
+ * thing: the invented images rendered as empty boxes, and the review reported
+ * a zero-length meta description because the only copy was inside a comment.
+ *
+ * Nothing downstream could see it either. Image handling in this system
+ * matches Markdown `![alt](url)` and nothing else, so an `<img>` tag is
+ * invisible to placement, to the strip, to the count and to the export.
+ *
+ * `<script>` is the one that is not merely untidy: `markdownToHtml` passes raw
+ * HTML through, the result is stored as `bodyHtml` and rendered with
+ * `dangerouslySetInnerHTML`, and the stage that writes it has just been
+ * reading live pages off the SERP.
+ */
+export function stripAuthoredHtml(markdown: string): string {
+  return (
+    markdown
+      // Script and style, opening tag through closing tag, contents included.
+      .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, "")
+      // An unterminated one still must not survive.
+      .replace(/<(script|style)\b[^>]*>[\s\S]*$/gi, "")
+      .replace(/<!--[\s\S]*?-->/g, "")
+      .replace(/<img\b[^>]*>/gi, "")
+      // Blank lines left where a block was.
+      .replace(/\n{3,}/g, "\n\n")
+      .trim()
+  );
+}
+
+/** Whether a body carries any of it — for the check that reports it. */
+export function findAuthoredHtml(markdown: string): string[] {
+  const found: string[] = [];
+  if (/<img\b/i.test(markdown)) found.push("<img>");
+  if (/<script\b/i.test(markdown)) found.push("<script>");
+  if (/<style\b/i.test(markdown)) found.push("<style>");
+  if (/<!--/.test(markdown)) found.push("HTML comment");
+  return found;
+}
+
+/**
  * Images are rendered as figures with captions.
  *
  * The convention the article pipeline emits is an image followed by an
