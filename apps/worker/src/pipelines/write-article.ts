@@ -17,6 +17,7 @@ import {
   serpIntelPrompt,
   type ArticleBrief,
   type BrandContext,
+  type SerpFacts,
 } from "@seo/playbook";
 import {
   countWords,
@@ -54,6 +55,8 @@ import {
 } from "../data.js";
 import { log } from "../log.js";
 import { createImageProvider } from "../providers/images.js";
+import { createKeywordProvider } from "../providers/keywords.js";
+import { createTimer, type Timer } from "../timings.js";
 import {
   draftSchema,
   imagePlanSchema,
@@ -85,6 +88,51 @@ export type WriteArticleInput = {
 /** Everything a stage may not put in the body, removed in one place. */
 function cleanBody(bodyMdx: string): string {
   return stripAuthoredHtml(stripFrontMatter(bodyMdx));
+}
+
+/**
+ * The top of the results page, when the rank tracker can tell us.
+ *
+ * Never fatal. A provider that is not configured, has no data for this keyword,
+ * or simply errors means the SERP stage falls back to crawling the web itself —
+ * slower, but the article still gets written. Returning null rather than
+ * throwing is what makes that fallback automatic.
+ */
+async function fetchSerpFacts(
+  keyword: string,
+  country: string,
+): Promise<SerpFacts | null> {
+  const provider = createKeywordProvider();
+  if (!provider) return null;
+
+  try {
+    const serp = await provider.getSerp(keyword, { country });
+    if (serp.results.length === 0) {
+      log.warn(
+        `${provider.name} returned no results for "${keyword}" — ` +
+          "the SERP stage will read the web itself instead",
+      );
+      return null;
+    }
+
+    return {
+      results: serp.results.slice(0, 10).map((entry) => ({
+        position: entry.position,
+        url: entry.url,
+        ...(entry.title !== undefined ? { title: entry.title } : {}),
+        ...(entry.snippet !== undefined ? { snippet: entry.snippet } : {}),
+      })),
+      peopleAlsoAsk: serp.peopleAlsoAsk,
+      relatedSearches: serp.relatedSearches,
+    };
+  } catch (error) {
+    log.warn(
+      `Could not read the SERP for "${keyword}": ` +
+        `${error instanceof Error ? error.message : String(error)} — ` +
+        "falling back to reading the web",
+    );
+    return null;
+  }
 }
 
 /**
@@ -128,34 +176,58 @@ export async function runWriteArticle(
     .set({ status: "generating" })
     .where(eq(planItems.id, input.planItemId));
 
+  const timer = createTimer();
+
   try {
     /* 1 — SERP intelligence ---------------------------------------------- */
     await report(1, TOTAL_STEPS, "Analysing the SERP", planItem.mainKeyword);
 
-    const serpIntel = await runStageWithRetry<SerpIntelOutput>(
-      serpIntelPrompt(brand, brief),
-      {
-        schema: serpIntelSchema,
-        label: "serp-intel",
-        model: stageModels.serpIntel,
-        tools: RESEARCH_TOOLS,
-        maxTurns: 45,
-        timeoutMs: 20 * 60_000,
-      },
+    // The rank tracker already knows what is on this results page, and we pay
+    // for it. Fetching it turns the slowest stage in the pipeline from a crawl
+    // of ten pages into one pass of judgement over data already in hand.
+    const serpFacts = await timer.measure("serp-fetch", () =>
+      fetchSerpFacts(planItem.mainKeyword, brand.country),
+    );
+
+    const serpIntel = await timer.measure("serp-intel", () =>
+      runStageWithRetry<SerpIntelOutput>(
+        serpIntelPrompt(brand, brief, serpFacts),
+        serpFacts
+          ? {
+              schema: serpIntelSchema,
+              label: "serp-intel",
+              model: stageModels.serpIntel,
+              // No tools at all. Every turn this stage used to spend was a
+              // page fetch; with the results in the prompt there is nothing
+              // left to fetch.
+              maxTurns: 3,
+              timeoutMs: 10 * 60_000,
+            }
+          : {
+              schema: serpIntelSchema,
+              label: "serp-intel",
+              model: stageModels.serpIntel,
+              tools: RESEARCH_TOOLS,
+              maxTurns: 45,
+              timeoutMs: 20 * 60_000,
+            },
+      ),
     );
 
     /* 2 — outline --------------------------------------------------------- */
     await report(2, TOTAL_STEPS, "Designing the outline");
 
-    const outline = await runStageWithRetry<OutlineOutput>(
-      outlinePrompt(brand, brief, serpIntel, playbook),
-      {
-        schema: outlineSchema,
-        label: "outline",
-        model: stageModels.outline,
-        maxTurns: 4,
-        timeoutMs: 15 * 60_000,
-      },
+    const outline = await timer.measure("outline", () =>
+      runStageWithRetry<OutlineOutput>(
+        outlinePrompt(brand, brief, serpIntel, playbook),
+        {
+          schema: outlineSchema,
+          label: "outline",
+          model: stageModels.outline,
+          maxTurns: 4,
+          timeoutMs: 15 * 60_000,
+        },
+      ),
     );
 
     await db()
@@ -168,7 +240,45 @@ export async function runWriteArticle(
       })
       .where(eq(articles.id, input.articleId));
 
-    /* 3 — draft ----------------------------------------------------------- */
+    /* 3 — draft, with the images being made alongside it ------------------ */
+
+    /**
+     * Images are planned from the outline and rendered while the article is
+     * written and reviewed.
+     *
+     * They used to run last, and they are the one part of the pipeline whose
+     * time is not ours: three or four renders at 30-60 seconds each, plus
+     * polling, spent watching Magnific work. The outline is settled by now and
+     * the revise stage is told to preserve the heading structure, so the
+     * placement anchors this plans against still exist at the end — and
+     * `reconcileImages` handles the one that does not.
+     *
+     * Deliberately not awaited here. The catch is attached immediately so a
+     * failure cannot surface as an unhandled rejection while the draft runs.
+     */
+    const imagesInFlight = timer
+      .measure("images", () =>
+        produceImages({
+          articleId: input.articleId,
+          clientId: input.clientId,
+          brand,
+          brief: { ...brief, title: outline.title },
+          outline,
+          mode: input.imageMode,
+          inlineCount: input.inlineImageCount,
+          styleReference: loaded.styleReference,
+          playbook,
+        }),
+      )
+      .catch((error: unknown) => {
+        // One failed picture never loses a finished article; neither does the
+        // whole image stage failing.
+        log.warn(
+          `Images failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        return [] as PlacedImage[];
+      });
+
     await report(
       3,
       TOTAL_STEPS,
@@ -176,18 +286,20 @@ export async function runWriteArticle(
       `${outline.sections.length} sections`,
     );
 
-    const draft = await runStageWithRetry<DraftOutput>(
-      draftPrompt(brand, { ...brief, title: outline.title }, outline, serpIntel, playbook),
-      {
-        schema: draftSchema,
-        label: "draft",
-        model: stageModels.draft,
-        // The SDK spends a turn on every rejected structured-output attempt,
-        // and its own retry budget is five. At six turns the stage ran out of
-        // room for a single malformed response and died on an expensive draft.
-        maxTurns: 12,
-        timeoutMs: 25 * 60_000,
-      },
+    const draft = await timer.measure("draft", () =>
+      runStageWithRetry<DraftOutput>(
+        draftPrompt(brand, { ...brief, title: outline.title }, outline, serpIntel, playbook),
+        {
+          schema: draftSchema,
+          label: "draft",
+          model: stageModels.draft,
+          // The SDK spends a turn on every rejected structured-output attempt,
+          // and its own retry budget is five. At six turns the stage ran out of
+          // room for a single malformed response and died on an expensive draft.
+          maxTurns: 12,
+          timeoutMs: 25 * 60_000,
+        },
+      ),
     );
 
     /* 4-5 — review and revise, until it is actually clean ----------------- */
@@ -317,35 +429,29 @@ export async function runWriteArticle(
       appliedFixes = [...appliedFixes, ...revised.appliedFixes];
     }
 
-    /* 6 — metadata -------------------------------------------------------- */
+    /* 6-7 — metadata, and whatever the image renders still owe us --------- */
     await report(6, TOTAL_STEPS, "Writing metadata and schema");
 
-    const meta = await runStageWithRetry<MetaOutput>(
-      metaPrompt(brand, brief, outline.title, bodyMdx),
-      {
-        schema: metaSchema,
-        label: "meta",
-        model: stageModels.meta,
-        maxTurns: 4,
-        timeoutMs: 10 * 60_000,
-      },
-    );
+    // Metadata depends only on the finished body, and the images depend on
+    // nothing that is still running. Waiting for one and then the other was
+    // wall-clock given away for free.
+    const [meta, images] = await Promise.all([
+      timer.measure("meta", () =>
+        runStageWithRetry<MetaOutput>(
+          metaPrompt(brand, brief, outline.title, bodyMdx),
+          {
+            schema: metaSchema,
+            label: "meta",
+            model: stageModels.meta,
+            maxTurns: 4,
+            timeoutMs: 10 * 60_000,
+          },
+        ),
+      ),
+      imagesInFlight,
+    ]);
 
-    /* 7 — images ---------------------------------------------------------- */
-    await report(7, TOTAL_STEPS, "Planning and generating images");
-
-    const images = await produceImages({
-      articleId: input.articleId,
-      clientId: input.clientId,
-      brand,
-      brief: { ...brief, title: outline.title },
-      bodyMdx,
-      mode: input.imageMode,
-      inlineCount: input.inlineImageCount,
-      styleReference: loaded.styleReference,
-      playbook,
-      report,
-    });
+    await report(7, TOTAL_STEPS, "Images ready", `${images.length}`);
 
     /* 8 — assemble -------------------------------------------------------- */
     await report(8, TOTAL_STEPS, "Assembling the article");
@@ -421,9 +527,19 @@ export async function runWriteArticle(
       .set({ status: "drafted", articleId: input.articleId })
       .where(eq(planItems.id, input.planItemId));
 
+    const timings = timer.summary();
+    log.info(
+      `Timings (s): ${Object.entries(timings)
+        .map(([stage, seconds]) => `${stage} ${seconds}`)
+        .join(" · ")}`,
+    );
+
     return {
       wordCount,
       seoScore: finalChecks.total,
+      // Seconds per stage, stored with the job. Overlapping stages make the
+      // parts add up to more than `total` — that difference is the saving.
+      timings,
       images: images.length,
       failedChecks: finalChecks.checks.filter((c) => !c.passed).map((c) => c.id),
       // What the review still objects to, if anything — the job result is
@@ -442,17 +558,40 @@ export async function runWriteArticle(
 
 /* -------------------------------------------------------------- images */
 
+/**
+ * The outline as the image plan needs to see it: the H1, then each heading with
+ * what it is meant to cover. Enough to choose a subject and an anchor, without
+ * waiting for prose that does not change either.
+ */
+function outlineForImages(outline: OutlineOutput): string {
+  const sections = outline.sections
+    .map((section) => {
+      const heading = "#".repeat(section.level ?? 2) + ` ${section.heading}`;
+      return section.intent ? `${heading}\n${section.intent}` : heading;
+    })
+    .join("\n\n");
+
+  return `# ${outline.title}\n\n${sections}`;
+}
+
 async function produceImages(params: {
   articleId: string;
   clientId: string;
   brand: BrandContext;
   brief: ArticleBrief;
-  bodyMdx: string;
+  /**
+   * The outline, not the finished body.
+   *
+   * Planning from the outline is what lets rendering start before the article
+   * is written. The plan needs headings to anchor an image to and a sense of
+   * what each section covers, and the outline has both — a finished draft adds
+   * prose the image plan was never reading anyway.
+   */
+  outline: OutlineOutput;
   mode: ImageMode;
   inlineCount: number;
   styleReference: BrandAsset | null;
   playbook: string;
-  report: StageReporter;
 }): Promise<PlacedImage[]> {
   const assets = await loadBrandAssets(params.clientId);
   const provider = createImageProvider();
@@ -466,7 +605,7 @@ async function produceImages(params: {
     imagePlanPrompt(
       params.brand,
       params.brief,
-      params.bodyMdx,
+      outlineForImages(params.outline),
       params.inlineCount,
       assets.map((a) => ({
         id: a.id,
@@ -598,13 +737,11 @@ async function produceImages(params: {
         .set({ status: "failed", error: message })
         .where(eq(articleImages.id, row.id));
     } finally {
+      // No progress report from here any more: this runs alongside the draft
+      // and the review loop, and reporting step 7 from it would drag the
+      // progress bar backwards while the article is still being written.
       done += 1;
-      await params.report(
-        7,
-        TOTAL_STEPS,
-        "Generating images",
-        `${done}/${ordered.length}`,
-      );
+      log.info(`Images: ${done}/${ordered.length}`);
     }
   }
 

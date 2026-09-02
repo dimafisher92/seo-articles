@@ -182,7 +182,9 @@ export async function runStage<T>(
         );
       }
 
-      log.debug(
+      // At info, not debug: this is the only place the cost of a stage is
+      // visible, and the default LOG_LEVEL hid it.
+      log.info(
         `stage:${options.label} done in ${Math.round((Date.now() - started) / 1000)}s ` +
           `(${message.num_turns} turns)`,
       );

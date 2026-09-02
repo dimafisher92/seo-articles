@@ -265,10 +265,34 @@ ${
 }`;
 }
 
+/**
+ * What the top of the SERP looks like, when a provider could tell us.
+ *
+ * Passing this turns the stage from research into judgement: it stops being a
+ * crawl of ten pages and becomes one pass over data we already pay for.
+ */
+export type SerpFacts = {
+  results: { position: number; url: string; title?: string; snippet?: string }[];
+  peopleAlsoAsk: string[];
+  relatedSearches: string[];
+};
+
 export function serpIntelPrompt(
   brand: BrandContext,
   brief: ArticleBrief,
+  serp?: SerpFacts | null,
 ): string {
+  const hasFacts = Boolean(serp && serp.results.length > 0);
+
+  const research = hasFacts
+    ? `## THE LIVE SERP
+This is the current top of the results page for "${brief.mainKeyword}" in ${brand.country}, pulled from the rank-tracking provider moments ago. It is fact, not memory — read it rather than searching.
+
+${JSON.stringify(serp, null, 2)}
+
+You have no tools and do not need any. Work from the data above plus what you know about how these publishers write. Where you cannot tell something from a title and snippet — an exact word count, for instance — say so with a 0 or an empty list rather than inventing it.`
+    : `Use web search and fetch the actual top results. Do not work from memory — rankings change and your training data is stale.`;
+
   return `${SENIOR_SEO_IDENTITY}
 
 ${renderBrandContext(brand)}
@@ -276,9 +300,9 @@ ${renderBrandContext(brand)}
 ${renderBrief(brief)}
 
 ## TASK
-Research the live SERP for "${brief.mainKeyword}" in ${brand.country} and report what it takes to beat it.
+Report what it takes to beat the SERP for "${brief.mainKeyword}" in ${brand.country}.
 
-Use web search and fetch the actual top results. Do not work from memory — rankings change and your training data is stale.
+${research}
 
 Report:
 - **topResults**: for each of the top 8-10 organic results — url, title, the format it uses, its main H2s, and its word count if you can tell.

@@ -73,6 +73,8 @@ import {
   describeStageModels,
   resolveStageModels,
 } from "../apps/worker/src/stage-models.js";
+import { createTimer } from "../apps/worker/src/timings.js";
+import { serpIntelPrompt } from "@seo/playbook";
 import {
   JobTimeoutError,
   makeReporter,
@@ -1099,6 +1101,115 @@ async function pureTests(): Promise<void> {
       detail(FRONT_MATTER_BODY),
       detail(stripFrontMatter(FRONT_MATTER_BODY)),
     );
+  });
+
+  console.log("\nWhere the minutes go");
+
+  await test("a stage's seconds are recorded even when it throws", async () => {
+    // The most interesting number in a failed run is how long it burned first,
+    // and a finally-less timer loses exactly that one.
+    let clock = 0;
+    const timer = createTimer(() => clock);
+
+    await timer
+      .measure("draft", async () => {
+        clock += 90_000;
+        throw new Error("boom");
+      })
+      .catch(() => {});
+
+    assert.equal(timer.summary().draft, 90);
+  });
+
+  await test("repeated stages accumulate rather than overwrite", () => {
+    let clock = 0;
+    const timer = createTimer(() => clock);
+    return (async () => {
+      for (const seconds of [30, 45, 20]) {
+        await timer.measure("revise", async () => {
+          clock += seconds * 1000;
+        });
+      }
+      // Three revision passes are one number worth comparing across runs.
+      assert.equal(timer.summary().revise, 95);
+    })();
+  });
+
+  await test("overlapping stages make the parts exceed the whole", async () => {
+    // That gap is the saving from running images alongside the draft; a total
+    // that merely summed the parts would hide it.
+    let clock = 0;
+    const timer = createTimer(() => clock);
+
+    const slow = timer.measure("images", async () => {
+      clock += 200_000;
+    });
+    await timer.measure("draft", async () => {});
+    await slow;
+
+    const summary = timer.summary();
+    assert.equal(summary.images, 200);
+    assert.ok(summary.total <= summary.images);
+  });
+
+  console.log("\nSERP intelligence");
+
+  const SERP_BRAND = {
+    name: "The Firm",
+    domain: "example.com",
+    country: "US",
+    locale: "es-US",
+    audience: "Houston drivers",
+    toneOfVoice: "plain",
+    services: [],
+    differentiators: [],
+    moneyPages: [],
+    facts: [],
+    forbidden: [],
+    authorPersona: "The Editorial Team",
+  } as unknown as Parameters<typeof serpIntelPrompt>[0];
+
+  const SERP_BRIEF = {
+    title: "Houston car accident lawyer fees",
+    mainKeyword: "houston car accident lawyer",
+    secondaryKeywords: [],
+    intent: "commercial",
+    pageType: "blog",
+    funnelStage: "mofu",
+    targetWordCount: 1700,
+    internalLinkTargets: [],
+    serpNotes: null,
+  } as unknown as Parameters<typeof serpIntelPrompt>[1];
+
+  await test("with provider data the stage is told not to search", () => {
+    const prompt = serpIntelPrompt(SERP_BRAND, SERP_BRIEF, {
+      results: [
+        { position: 1, url: "https://rival.com/fees", title: "Fees explained" },
+      ],
+      peopleAlsoAsk: ["How much does a lawyer take?"],
+      relatedSearches: [],
+    });
+
+    assert.ok(prompt.includes("https://rival.com/fees"));
+    assert.ok(/have no tools/i.test(prompt));
+    assert.ok(!/Use web search/i.test(prompt));
+  });
+
+  await test("without provider data it still knows how to read the web", () => {
+    // The fallback matters: a keyword the tracker has never seen must still
+    // produce an article, just more slowly.
+    const prompt = serpIntelPrompt(SERP_BRAND, SERP_BRIEF, null);
+    assert.ok(/Use web search/i.test(prompt));
+    assert.ok(!/have no tools/i.test(prompt));
+  });
+
+  await test("an empty result set counts as no data", () => {
+    const prompt = serpIntelPrompt(SERP_BRAND, SERP_BRIEF, {
+      results: [],
+      peopleAlsoAsk: [],
+      relatedSearches: [],
+    });
+    assert.ok(/Use web search/i.test(prompt));
   });
 
   console.log("\nImage generation rules");
