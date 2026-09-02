@@ -48,10 +48,11 @@ already holds the connection.
 | Path | What it is |
 |---|---|
 | `apps/web` | Next.js app — deploys to Vercel |
-| `apps/worker` | The generation worker — runs on your machine |
+| `apps/worker` | The generation worker — runs on your machine or a VPS |
 | `packages/db` | Drizzle schema and migrations |
 | `packages/shared` | Job contracts, provider interfaces, SEO checks, rendering |
 | `packages/seo` | The SEO playbook (editable Markdown) and prompt builders |
+| `deploy` | systemd unit and scripts for running the worker on a server |
 
 ---
 
@@ -118,6 +119,9 @@ It polls, claims one job at a time, and reports progress back. Jobs run
 strictly sequentially: article generation is token-heavy and a subscription's
 rate limit is shared, so running two at once just means both stalling on
 backoff instead of one finishing.
+
+To keep generating when your machine is off, put the worker on a server —
+[`docs/VPS.md`](docs/VPS.md) is the runbook and takes about fifteen minutes.
 
 ---
 
@@ -280,8 +284,9 @@ It needs a live Postgres and creates and removes its own rows.
   and `CLAUDE_FAST_MODEL` let you put the mechanical stages (clustering) on a
   cheaper model than the writing.
 - **The worker is a single point of failure for generation.** Jobs are never
-  lost, but they stop moving when the machine is off. If that becomes a problem,
-  the same worker runs unchanged on a small VPS.
+  lost, but they stop moving when the machine is off. The same worker runs
+  unchanged on a small VPS — [`docs/VPS.md`](docs/VPS.md) is the runbook, and
+  `deploy/` has the systemd unit and the install and update scripts.
 - **A job whose worker vanishes** is requeued after 10 minutes of silence, up
   to `maxAttempts`. The sweep runs on the claim endpoint, so the rescue happens
   the moment a worker next asks for work rather than on a schedule — Vercel's

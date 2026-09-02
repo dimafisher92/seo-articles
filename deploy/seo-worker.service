@@ -1,0 +1,49 @@
+# The generation worker as a service.
+#
+# Install with deploy/install-worker.sh, which substitutes the paths below.
+# Deliberately plain: this runs one long-lived Node process that talks only
+# outbound, so there is nothing to harden that a dedicated user and a locked
+# down .env do not already cover.
+
+[Unit]
+Description=SEO article generation worker
+Documentation=https://github.com/dimafisher92/seo-articles/blob/main/docs/VPS.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+Group=__USER__
+
+# dotenv in apps/worker/src/config.ts reads .env from the working directory,
+# so this path is not cosmetic.
+WorkingDirectory=__ROOT__/apps/worker
+ExecStart=/usr/bin/env pnpm start
+
+Restart=always
+RestartSec=10
+
+# The worker finishes the article it is holding when it gets SIGTERM, and an
+# article legitimately takes up to JOB_TIMEOUT_MINUTES. systemd's default 90
+# seconds would kill it mid-draft on every deploy — 50 minutes of grace, which
+# is the 45-minute deadline plus room to report the result.
+KillSignal=SIGTERM
+TimeoutStopSec=3000
+
+# Journald handles the logs; `journalctl -u seo-worker` reads them.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=seo-worker
+
+# The process needs its home: the Agent SDK keeps state under $HOME.
+Environment=HOME=__HOME__
+Environment=NODE_ENV=production
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=false
+
+[Install]
+WantedBy=multi-user.target

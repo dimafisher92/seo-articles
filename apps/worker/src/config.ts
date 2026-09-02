@@ -1,3 +1,5 @@
+import { hostname } from "node:os";
+
 import { config as loadEnv } from "dotenv";
 
 import {
@@ -23,8 +25,15 @@ export const config = {
   /** Base URL of the Vercel deployment this worker pulls jobs from. */
   appUrl: required("APP_URL").replace(/\/+$/, ""),
   workerSecret: required("WORKER_SECRET"),
-  /** Identifies this worker in `jobs.claimed_by`. */
-  workerId: optional("WORKER_ID") ?? `worker-${process.pid}`,
+  /**
+   * Identifies this worker in `jobs.claimed_by`.
+   *
+   * The machine, not the process. Under a service manager the pid changes on
+   * every restart, so a pid-based name stops meaning anything at exactly the
+   * moment the column is worth reading — after a crash, when the question is
+   * which machine had the job.
+   */
+  workerId: optional("WORKER_ID") ?? hostname(),
 
   databaseUrl: required("DATABASE_URL"),
 
