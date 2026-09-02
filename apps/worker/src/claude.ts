@@ -4,6 +4,7 @@ import { sleep } from "@seo/shared";
 
 import { config, assertClaudeCredentials } from "./config.js";
 import { log } from "./log.js";
+import { isRateLimit, isRetryableFailure } from "./retry.js";
 
 /**
  * Thin wrapper over the Agent SDK for one-shot, schema-validated stages.
@@ -36,13 +37,6 @@ export class ClaudeStageError extends Error {
   }
 }
 
-const RATE_LIMIT_PATTERN =
-  /rate.?limit|429|overloaded|529|usage limit|quota|too many requests/i;
-
-function isRateLimit(message: string): boolean {
-  return RATE_LIMIT_PATTERN.test(message);
-}
-
 /** Web research stages need these; reasoning-only stages get no tools at all. */
 export const RESEARCH_TOOLS = ["WebSearch", "WebFetch"];
 
@@ -72,6 +66,26 @@ function lastToolResultText(message: unknown): string | undefined {
       }
     }
   }
+
+  const joined = parts.join(" ").trim();
+  return joined || undefined;
+}
+
+/** The text of an assistant message, if it said anything rather than calling a tool. */
+function assistantText(message: unknown): string | undefined {
+  const content = (message as { message?: { content?: unknown } }).message
+    ?.content;
+  if (!Array.isArray(content)) return undefined;
+
+  const parts = content
+    .filter(
+      (block): block is { type: string; text: string } =>
+        typeof block === "object" &&
+        block !== null &&
+        (block as { type?: string }).type === "text" &&
+        typeof (block as { text?: unknown }).text === "string",
+    )
+    .map((block) => block.text);
 
   const joined = parts.join(" ").trim();
   return joined || undefined;
@@ -147,12 +161,30 @@ export async function runStage<T>(
    * being thrown away on every failure.
    */
   let lastToolResult: string | undefined;
+  /**
+   * The last thing the model said, and how many turns went by.
+   *
+   * A stage came back `error_max_turns` twelve seconds in — twelve turns that
+   * cannot have been twelve turns of work — and the tool-result capture below
+   * printed nothing, because those turns were not rejected structured
+   * outputs. So the error named a subtype and nothing else. Whatever the model
+   * was saying while it burned them is the one fact that would explain it.
+   */
+  let lastAssistantText: string | undefined;
+  let turns = 0;
 
   try {
     for await (const message of query({ prompt, options: sdkOptions })) {
       if (message.type === "user") {
+        turns += 1;
         const text = lastToolResultText(message);
         if (text) lastToolResult = text;
+        continue;
+      }
+
+      if (message.type === "assistant") {
+        const text = assistantText(message);
+        if (text) lastAssistantText = text;
         continue;
       }
 
@@ -165,13 +197,17 @@ export async function runStage<T>(
             : "";
         // Which limit was hit is half the diagnosis, and the subtypes carry it.
         const detail = [message.subtype, errors].filter(Boolean).join(": ");
-        const because = lastToolResult
-          ? ` — last rejection: ${truncateForLog(lastToolResult)}`
-          : "";
+
+        const because =
+          lastToolResult !== undefined
+            ? ` — last rejection: ${truncateForLog(lastToolResult)}`
+            : lastAssistantText !== undefined
+              ? ` — last thing the model said after ${turns} turns: ${truncateForLog(lastAssistantText)}`
+              : ` — the model said nothing in ${turns} turns`;
 
         throw new ClaudeStageError(
           `Stage ${options.label} failed: ${detail}${because}`,
-          isRateLimit(detail) || message.subtype === "error_during_execution",
+          isRetryableFailure(message.subtype, detail),
         );
       }
 

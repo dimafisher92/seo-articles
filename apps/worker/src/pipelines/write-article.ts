@@ -362,15 +362,17 @@ export async function runWriteArticle(
           checksReadyForReview([check.id]).length > 0,
       );
 
-      const qa = await runStageWithRetry<QaOutput>(
-        qaPrompt(brand, brief, bodyMdx, failed, playbook),
-        {
-          schema: qaSchema,
-          label: `qa-${pass}`,
-          model: stageModels.qa,
-          maxTurns: 4,
-          timeoutMs: 15 * 60_000,
-        },
+      const qa = await timer.measure("qa", () =>
+        runStageWithRetry<QaOutput>(
+          qaPrompt(brand, brief, bodyMdx, failed, playbook),
+          {
+            schema: qaSchema,
+            label: `qa-${pass}`,
+            model: stageModels.qa,
+            maxTurns: 4,
+            timeoutMs: 15 * 60_000,
+          },
+        ),
       );
 
       issues = qa.issues;
@@ -422,16 +424,39 @@ export async function runWriteArticle(
         `${qa.instructions.length} instructions, pass ${pass}`,
       );
 
-      const revised = await runStageWithRetry<ReviseOutput>(
-        revisePrompt(brand, bodyMdx, qa.instructions, playbook),
-        {
-          schema: reviseSchema,
-          label: `revise-${pass}`,
-          model: stageModels.revise,
-          maxTurns: 12,
-          timeoutMs: 25 * 60_000,
-        },
-      );
+      /**
+       * A revision that fails is a revision that did not happen — not a lost
+       * article.
+       *
+       * It used to throw out of this loop and kill the job. One run lost a
+       * finished draft and four already-rendered, already-paid-for images
+       * because `revise-1` came back `error_max_turns` twelve seconds in.
+       * Everything needed to ship was in hand: the draft, and a review saying
+       * what was wrong with it — which is what `needs_attention` is for. The
+       * loop already leaves this way when the review demands a revision
+       * without giving instructions.
+       */
+      let revised: ReviseOutput;
+      try {
+        revised = await timer.measure("revise", () =>
+          runStageWithRetry<ReviseOutput>(
+            revisePrompt(brand, bodyMdx, qa.instructions, playbook),
+            {
+              schema: reviseSchema,
+              label: `revise-${pass}`,
+              model: stageModels.revise,
+              maxTurns: 12,
+              timeoutMs: 25 * 60_000,
+            },
+          ),
+        );
+      } catch (error) {
+        log.warn(
+          `Revision pass ${pass} failed, keeping the draft as it stands: ` +
+            `${error instanceof Error ? error.message : String(error)}`,
+        );
+        break;
+      }
 
       bodyMdx = cleanBody(revised.bodyMdx);
       appliedFixes = [...appliedFixes, ...revised.appliedFixes];

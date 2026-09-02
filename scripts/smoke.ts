@@ -76,6 +76,7 @@ import {
   resolveStageModels,
 } from "../apps/worker/src/stage-models.js";
 import { createTimer } from "../apps/worker/src/timings.js";
+import { isRetryableFailure } from "../apps/worker/src/retry.js";
 import { serpIntelPrompt } from "@seo/playbook";
 import {
   JobTimeoutError,
@@ -1152,6 +1153,27 @@ async function pureTests(): Promise<void> {
     const summary = timer.summary();
     assert.equal(summary.images, 200);
     assert.ok(summary.total <= summary.images);
+  });
+
+  await test("a stage that burned its turns in seconds is worth another go", () => {
+    // Not retrying this cost a finished draft and four rendered images.
+    assert.equal(isRetryableFailure("error_max_turns", "error_max_turns"), true);
+  });
+
+  await test("five spent schema attempts are not paid for a sixth time", () => {
+    assert.equal(
+      isRetryableFailure("error_max_structured_output_retries", "…5 attempts"),
+      false,
+    );
+  });
+
+  await test("a rate limit is retryable whatever the subtype says", () => {
+    assert.equal(isRetryableFailure("error_during_execution", "429 rate limit"), true);
+    assert.equal(isRetryableFailure("something_new", "overloaded"), true);
+  });
+
+  await test("an unknown failure is not retried on a guess", () => {
+    assert.equal(isRetryableFailure("something_new", "no idea"), false);
   });
 
   console.log("\nSERP intelligence");
