@@ -100,6 +100,47 @@ export async function heartbeat(
     .where(eq(jobs.id, jobId));
 }
 
+/**
+ * Stops a job on the operator's say-so.
+ *
+ * Only a job that has not finished: cancelling a done job would rewrite
+ * history, and cancelling an already-cancelled one twice is a no-op worth
+ * reporting honestly rather than pretending to do again.
+ *
+ * The worker learns about it through the heartbeat it already sends — it is
+ * pull-based and has no inbox — so a running job stops within one heartbeat
+ * rather than the instant the button is pressed.
+ */
+export async function cancelJob(jobId: string): Promise<boolean> {
+  const [canceled] = await db()
+    .update(jobs)
+    .set({
+      status: "canceled",
+      error: "Canceled from the app",
+      finishedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(jobs.id, jobId),
+        inArray(jobs.status, ["queued", "running"]),
+      ),
+    )
+    .returning({ id: jobs.id });
+
+  return Boolean(canceled);
+}
+
+/** Whether the worker should drop what it is doing. */
+export async function isCanceled(jobId: string): Promise<boolean> {
+  const [job] = await db()
+    .select({ status: jobs.status })
+    .from(jobs)
+    .where(eq(jobs.id, jobId))
+    .limit(1);
+
+  return job?.status === "canceled";
+}
+
 export async function completeJob(
   jobId: string,
   result: Record<string, unknown>,

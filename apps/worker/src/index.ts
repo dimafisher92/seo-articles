@@ -6,7 +6,7 @@ import {
 import { closeDb } from "@seo/db";
 
 import { claimJob, reportComplete, reportFailure, reportProgress } from "./api.js";
-import { ClaudeStageError, sleep } from "./claude.js";
+import { ClaudeStageError, setJobSignal, sleep } from "./claude.js";
 import { assertClaudeCredentials, config, describeStageModels } from "./config.js";
 import { log } from "./log.js";
 import { runContentPlan } from "./pipelines/content-plan.js";
@@ -18,6 +18,7 @@ import { describeKeywordProvider } from "./providers/keywords.js";
 import { runWriteArticle } from "./pipelines/write-article.js";
 import type { StageReporter } from "./pipelines/types.js";
 import {
+  JobCanceledError,
   JobTimeoutError,
   makeReporter,
   startHeartbeat,
@@ -84,11 +85,22 @@ async function tick(): Promise<boolean> {
   const { report, current } = makeReporter(job.id, reportProgress, (line) =>
     log.info(line),
   );
+
+  // Stop, pressed in the app, arrives on the heartbeat's response. Aborting
+  // here reaches the stage that is running right now instead of waiting for it
+  // to finish — a draft has twenty-five minutes of rope.
+  const cancel = new AbortController();
+  setJobSignal(cancel.signal);
+
   const stopHeartbeat = startHeartbeat(
     job.id,
     current,
     reportProgress,
     config.heartbeatSeconds * 1000,
+    () => {
+      log.warn(`Job ${job.id.slice(0, 8)} was stopped from the app`);
+      cancel.abort();
+    },
   );
 
   try {
@@ -103,6 +115,17 @@ async function tick(): Promise<boolean> {
       result,
     );
   } catch (error) {
+    // Cancelled is neither done nor failed. The app set the status when it
+    // asked, so reporting anything here would overwrite the operator's own
+    // decision with our account of it.
+    if (error instanceof JobCanceledError || cancel.signal.aborted) {
+      log.info(`■ ${job.type} stopped after ${Math.round((Date.now() - started) / 1000)}s`);
+      stopHeartbeat();
+      setJobSignal(undefined);
+      currentJobId = null;
+      return true;
+    }
+
     const message = error instanceof Error ? error.message : String(error);
     // A timeout is not a blip. The job ran for the whole deadline and would
     // spend it again to reach the same place: three attempts at 45 minutes is
@@ -121,6 +144,7 @@ async function tick(): Promise<boolean> {
     });
   } finally {
     stopHeartbeat();
+    setJobSignal(undefined);
     currentJobId = null;
   }
 

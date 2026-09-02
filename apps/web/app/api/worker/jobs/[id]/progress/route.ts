@@ -1,6 +1,6 @@
 import { jobProgressSchema } from "@seo/shared";
 
-import { heartbeat } from "@/lib/queue";
+import { heartbeat, isCanceled } from "@/lib/queue";
 import { isWorkerAuthorized, unauthorized } from "@/lib/worker-auth";
 
 export const dynamic = "force-dynamic";
@@ -19,5 +19,9 @@ export async function POST(
   }
 
   await heartbeat(id, parsed.data);
-  return Response.json({ ok: true });
+
+  // The worker pulls; it has no inbox. This response is the only channel that
+  // reaches it while a job runs, so the answer to "should I still be doing
+  // this?" rides back on the heartbeat it was already sending.
+  return Response.json({ ok: true, canceled: await isCanceled(id) });
 }

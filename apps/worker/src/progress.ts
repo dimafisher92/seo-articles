@@ -20,10 +20,11 @@ export type Stage = { step: number; totalSteps: number; label: string };
 
 export type ProgressUpdate = Stage & { detail?: string };
 
+/** Returns true when the job has been cancelled and should stop. */
 export type ProgressSink = (
   jobId: string,
   update: ProgressUpdate,
-) => Promise<void> | void;
+) => Promise<boolean | void> | boolean | void;
 
 export type Reporter = {
   report: StageReporter;
@@ -43,29 +44,53 @@ export function makeReporter(
     report: async (step, totalSteps, label, detail) => {
       latest = { step, totalSteps, label };
       onLog(`  [${step}/${totalSteps}] ${label}${detail ? ` — ${detail}` : ""}`);
-      await sink(jobId, {
+      const canceled = await sink(jobId, {
         step,
         totalSteps,
         label,
         ...(detail ? { detail } : {}),
       });
+      if (canceled) throw new JobCanceledError();
     },
   };
 }
 
+/**
+ * @param onCanceled called when the sink reports the job was cancelled — the
+ * only moment a running job hears about a Stop pressed in the app.
+ */
 export function startHeartbeat(
   jobId: string,
   current: () => Stage,
   sink: ProgressSink,
   intervalMs: number,
+  onCanceled: () => void = () => {},
 ): () => void {
   const timer = setInterval(() => {
-    void sink(jobId, { ...current(), detail: "still running" });
+    void (async () => {
+      if (await sink(jobId, { ...current(), detail: "still running" })) {
+        onCanceled();
+      }
+    })();
   }, intervalMs);
 
   // Do not keep the process alive purely for the heartbeat.
   timer.unref?.();
   return () => clearInterval(timer);
+}
+
+/**
+ * Raised when the job was stopped from the app.
+ *
+ * Thrown rather than returned so it unwinds a pipeline from wherever it is,
+ * the same way a timeout does. It is not a failure: nothing is reported back,
+ * because the app already knows — it is what asked.
+ */
+export class JobCanceledError extends Error {
+  constructor() {
+    super("Stopped from the app");
+    this.name = "JobCanceledError";
+  }
 }
 
 /** Raised when a job outlives its deadline, carrying the stage it died on. */

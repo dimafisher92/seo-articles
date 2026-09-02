@@ -37,6 +37,23 @@ export class ClaudeStageError extends Error {
   }
 }
 
+/**
+ * The signal that stops whatever stage is running.
+ *
+ * Set once per job by the worker loop. A stage aborted this way is not
+ * retried: the operator pressed Stop, and three more attempts is the opposite
+ * of what they asked for.
+ *
+ * Module-level rather than threaded through every pipeline signature, because
+ * the alternative is a parameter on every stage of every pipeline for
+ * something exactly one caller sets and exactly one place reads.
+ */
+let jobSignal: AbortSignal | undefined;
+
+export function setJobSignal(signal: AbortSignal | undefined): void {
+  jobSignal = signal;
+}
+
 /** Web research stages need these; reasoning-only stages get no tools at all. */
 export const RESEARCH_TOOLS = ["WebSearch", "WebFetch"];
 
@@ -128,6 +145,12 @@ export async function runStage<T>(
   const controller = new AbortController();
   const timeout = options.timeoutMs ?? 15 * 60_000;
   const timer = setTimeout(() => controller.abort(), timeout);
+
+  // A Stop pressed in the app reaches the SDK here, mid-call, rather than
+  // waiting for a stage that may have twenty minutes left to run.
+  const stop = (): void => controller.abort();
+  jobSignal?.addEventListener("abort", stop, { once: true });
+  if (jobSignal?.aborted) controller.abort();
 
   const started = Date.now();
   log.debug(`stage:${options.label} starting`);
@@ -236,6 +259,12 @@ export async function runStage<T>(
 
     const message = error instanceof Error ? error.message : String(error);
     if (controller.signal.aborted) {
+      if (jobSignal?.aborted) {
+        throw new ClaudeStageError(
+          `Stage ${options.label} stopped: the job was cancelled`,
+          false,
+        );
+      }
       throw new ClaudeStageError(
         `Stage ${options.label} timed out after ${Math.round(timeout / 1000)}s`,
         true,
@@ -247,6 +276,7 @@ export async function runStage<T>(
     );
   } finally {
     clearTimeout(timer);
+    jobSignal?.removeEventListener("abort", stop);
   }
 }
 

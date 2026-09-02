@@ -79,6 +79,7 @@ import { createTimer } from "../apps/worker/src/timings.js";
 import { isRetryableFailure } from "../apps/worker/src/retry.js";
 import { serpIntelPrompt } from "@seo/playbook";
 import {
+  JobCanceledError,
   JobTimeoutError,
   makeReporter,
   startHeartbeat,
@@ -90,7 +91,9 @@ import { SearchAtlasProvider } from "../apps/worker/src/providers/searchatlas.js
 // the two places where a subtle change would pass typecheck and still lose or
 // duplicate work, so the test has to exercise the real ones.
 import {
+  cancelJob,
   claimNextJob,
+  isCanceled,
   requeueStaleJobs,
   STALE_JOB_MINUTES,
 } from "../apps/web/lib/queue.js";
@@ -1104,6 +1107,33 @@ async function pureTests(): Promise<void> {
       detail(FRONT_MATTER_BODY),
       detail(stripFrontMatter(FRONT_MATTER_BODY)),
     );
+  });
+
+  console.log("\nStopping a job");
+
+  await test("a reporter that hears 'cancelled' stops the pipeline", async () => {
+    // The Stop button cannot reach into the worker — it is a separate process
+    // that pulls. The answer rides back on the progress call it was making
+    // anyway, and has to unwind whatever stage is running.
+    const { report } = makeReporter("job-1", () => true);
+    await assert.rejects(() => report(3, 8, "Writing the draft"), JobCanceledError);
+  });
+
+  await test("an ordinary progress report does not stop anything", async () => {
+    const { report } = makeReporter("job-1", () => undefined);
+    await report(3, 8, "Writing the draft");
+  });
+
+  await test("the heartbeat raises the alarm rather than throwing into a timer", async () => {
+    // Throwing from inside setInterval would be an unhandled rejection with
+    // nobody to catch it; the loop needs telling instead.
+    let stopped = false;
+    const stop = startHeartbeat("job-1", () => ({ step: 1, totalSteps: 8, label: "x" }), () => true, 5, () => {
+      stopped = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    stop();
+    assert.equal(stopped, true);
   });
 
   console.log("\nWhere the minutes go");
@@ -2235,6 +2265,26 @@ async function queueTests(clientId: string): Promise<void> {
     const ids = claims.filter(Boolean).map((c) => c!.id);
     assert.equal(ids.length, 5, `only ${ids.length} of 5 jobs were claimed`);
     assert.equal(new Set(ids).size, 5, "the same job was claimed twice");
+  });
+
+  await test("stopping a job takes it out of the queue for good", async () => {
+    const [job] = await db()
+      .insert(jobs)
+      .values({ type: "write_article", clientId, payload: {}, status: "queued" })
+      .returning();
+
+    assert.equal(await cancelJob(job!.id), true);
+    assert.equal(await isCanceled(job!.id), true);
+    assert.equal(await claimNextJob("worker-1"), null, "a cancelled job is not handed out");
+  });
+
+  await test("a finished job cannot be cancelled after the fact", async () => {
+    const [job] = await db()
+      .insert(jobs)
+      .values({ type: "write_article", clientId, payload: {}, status: "done" })
+      .returning();
+
+    assert.equal(await cancelJob(job!.id), false, "cancelling done work would rewrite history");
   });
 
   await test("the reaper requeues a job whose worker went silent", async () => {

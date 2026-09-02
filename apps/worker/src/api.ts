@@ -54,16 +54,29 @@ export async function claimJob(): Promise<ClaimedJob | null> {
   return claimResponseSchema.parse(raw).job;
 }
 
+/**
+ * Reports progress, and returns whether the job has been cancelled.
+ *
+ * The worker pulls and has no inbox, so this response is the only channel that
+ * reaches it while a job runs. A cancellation rides back on the heartbeat the
+ * worker was already sending.
+ *
+ * A dropped heartbeat reports "not cancelled": a network blip must not stop an
+ * article, and the reaper only requeues after several minutes of silence.
+ */
 export async function reportProgress(
   jobId: string,
   progress: JobProgressInput,
-): Promise<void> {
+): Promise<boolean> {
   try {
-    await post(`/api/worker/jobs/${jobId}/progress`, progress);
+    const response = await post<{ canceled?: boolean }>(
+      `/api/worker/jobs/${jobId}/progress`,
+      progress,
+    );
+    return response.canceled === true;
   } catch (error) {
-    // A dropped heartbeat is not worth failing a running job over; the reaper
-    // only requeues after several consecutive minutes of silence.
     log.warn(`heartbeat failed for job ${jobId}`, error);
+    return false;
   }
 }
 
