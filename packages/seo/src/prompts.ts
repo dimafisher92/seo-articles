@@ -407,7 +407,7 @@ Hard requirements:
 - Include at least one table or structured list where it genuinely helps.
 - End with the FAQ section as H2 "Frequently Asked Questions", each question an H3.
 - Return Markdown only. No raw HTML anywhere in the body: no \`<img>\`, no \`<script>\`, no \`<style>\`, no HTML comments, and no invented file paths like \`/img/something.webp\`.
-- Do NOT insert images in any syntax, do NOT write a JSON-LD block, and do NOT write the title tag, slug or meta description into the body — even inside a comment. Images, schema and metadata are produced by later stages, and anything you write here is either deleted or published as visible text.
+- Do NOT insert images in any syntax, do NOT write a JSON-LD block, and do NOT write the title tag, slug or meta description into the body — not as a comment, not as a blockquote, not as a "metadata for publishing" note, not anywhere. Nothing goes above the H1. Images, schema and metadata are produced by later stages, and anything you write here is either deleted or published as visible text.
 - Do NOT invent statistics, prices, dates, quotes or study findings.
 
 Re-read section 11 of the playbook before you write, and again before you finish. The single fastest way to fail this task is to write competent, generic, machine-sounding prose.

@@ -40,6 +40,43 @@ export type GateDecision = {
 };
 
 /**
+ * Checks that cannot pass yet when the review runs, and must not be judged.
+ *
+ * The metadata stage runs after the review loop, so during review there is no
+ * meta description and no slug — and the checks for them therefore failed on
+ * every article, every pass, forever. Three consequences, all of which looked
+ * like something else:
+ *
+ * - the gate saw failed blocking checks and demanded a revision every time, so
+ *   every article burned all three passes whether or not it needed them;
+ * - the review was handed "meta description: 0 characters" as a defect to fix,
+ *   and the only place it can write from inside a revision is the body — which
+ *   is where the on-page-mechanics HTML comment and then the metadata
+ *   blockquote came from. We asked for them;
+ * - that block then sat above the H1 and made the opening-sentence check read
+ *   a twelve-word answer as forty-one.
+ *
+ * `runSeoChecks` reports on what it is given, which is right. Deciding what is
+ * knowable yet belongs here.
+ */
+export const CHECKS_PENDING_LATER_STAGES = new Set([
+  // Written by the metadata stage, after review.
+  "meta-description-length",
+  "meta-description-keyword",
+  "slug-format",
+  // Generated alongside the draft and placed at assembly.
+  "image-count",
+  "image-alt",
+  // Built at assembly from the metadata.
+  "structured-data",
+]);
+
+/** The failed checks a review can actually act on. */
+export function checksReadyForReview(failedCheckIds: string[]): string[] {
+  return failedCheckIds.filter((id) => !CHECKS_PENDING_LATER_STAGES.has(id));
+}
+
+/**
  * Checks that are about the writing and must be fixed before shipping.
  *
  * Deliberately not every check: `image-count` fails during review because

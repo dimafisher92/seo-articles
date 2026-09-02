@@ -26,6 +26,7 @@ import {
   readingTimeMinutes,
   runSeoChecks,
   gateDraft,
+  checksReadyForReview,
   statusAfterReview,
   type QaIssue,
   slugify,
@@ -39,6 +40,7 @@ import {
   markdownToHtml,
   reconcileImages,
   stripAuthoredHtml,
+  stripBeforeH1,
   stripFrontMatter,
   type PlacedImage,
 } from "@seo/shared";
@@ -87,7 +89,7 @@ export type WriteArticleInput = {
 
 /** Everything a stage may not put in the body, removed in one place. */
 function cleanBody(bodyMdx: string): string {
-  return stripAuthoredHtml(stripFrontMatter(bodyMdx));
+  return stripBeforeH1(stripAuthoredHtml(stripFrontMatter(bodyMdx)));
 }
 
 /**
@@ -345,14 +347,20 @@ export async function runWriteArticle(
         faqCount: outline.faq.length,
         internalLinkCount: draft.internalLinks.length,
         externalSourceCount: draft.externalSources.length,
-        // Images are added after review; excluded so their checks do not
-        // dominate the revision instructions.
-        imageCount: 3,
+        imageCount: 0,
         imagesMissingAlt: 0,
         targetWordCount: planItem.targetWordCount,
       });
 
-      const failed = checks.checks.filter((check) => !check.passed);
+      // Only what the review can actually fix. The metadata stage has not run
+      // yet, so its checks fail here by construction — and handing the review
+      // "no meta description, no slug" is what taught it to write metadata
+      // into the body.
+      const failed = checks.checks.filter(
+        (check) =>
+          !check.passed &&
+          checksReadyForReview([check.id]).length > 0,
+      );
 
       const qa = await runStageWithRetry<QaOutput>(
         qaPrompt(brand, brief, bodyMdx, failed, playbook),

@@ -51,6 +51,39 @@ export function stripFrontMatter(markdown: string): string {
 }
 
 /**
+ * Removes anything a draft placed above the H1.
+ *
+ * The body starts at the H1 — every prompt says so, and the assembler,
+ * the preview and every export assume it. What kept turning up above it was
+ * publishing apparatus the model had no business writing: YAML front matter,
+ * an "on-page mechanics" HTML comment, and most recently a blockquote headed
+ * "Metadatos para la etapa de publicación" carrying the title tag, slug and
+ * meta description.
+ *
+ * The root cause of those is fixed elsewhere — the review used to be told the
+ * meta description was empty, so it wrote one into the only place it could
+ * reach. This is the backstop, and it is the general form of the rule rather
+ * than a pattern per language: content before the first heading is not content.
+ *
+ * A body with no H1 at all is left alone. Deleting everything from an article
+ * that merely forgot its heading would be worse than the thing being fixed.
+ */
+export function stripBeforeH1(markdown: string): string {
+  const match = /^#[ \t]+\S/m.exec(markdown);
+  if (!match || match.index === 0) return markdown;
+
+  const preamble = markdown.slice(0, match.index);
+  // A lead written above the heading is a mistake worth keeping; apparatus is
+  // not. Blockquotes and metadata-shaped lines go, real prose stays.
+  const isApparatus = preamble
+    .split("\n")
+    .filter((line) => line.trim())
+    .every((line) => /^\s*(>|\*\*|-{3,}|[A-Za-z_][\w.-]*\s*:)/.test(line.trim()));
+
+  return isApparatus ? markdown.slice(match.index) : markdown;
+}
+
+/**
  * Removes HTML the draft stage had no business writing.
  *
  * A draft came back as an agency deliverable rather than a body: three

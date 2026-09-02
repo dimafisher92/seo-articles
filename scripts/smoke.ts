@@ -37,12 +37,14 @@ import {
   runSeoChecks,
   reconcileImages,
   stripAuthoredHtml,
+  stripBeforeH1,
   findAuthoredHtml,
   stripFrontMatter,
   stripUnknownImages,
   type PlacedImage,
   findMachineTells,
   gateDraft,
+  checksReadyForReview,
   statusAfterReview,
   ASPECT_RATIOS,
   imageRequestFor,
@@ -1210,6 +1212,84 @@ async function pureTests(): Promise<void> {
       relatedSearches: [],
     });
     assert.ok(/Use web search/i.test(prompt));
+  });
+
+  console.log("\nWhat the review may be judged on");
+
+  await test("metadata checks are not held against a draft that has none yet", () => {
+    // The bug this pins: the metadata stage runs after the review, so these
+    // three failed on every article, every pass. The gate then demanded a
+    // revision every time, and the review — told the meta description was
+    // empty — wrote one into the body, which is the only place it can write.
+    assert.deepEqual(
+      checksReadyForReview([
+        "meta-description-length",
+        "meta-description-keyword",
+        "slug-format",
+        "word-count",
+        "machine-tells",
+      ]),
+      ["word-count", "machine-tells"],
+    );
+  });
+
+  await test("a draft with only pending checks failing is not sent back", () => {
+    const decision = gateDraft({
+      verdict: "ship",
+      issues: [],
+      failedCheckIds: checksReadyForReview([
+        "meta-description-length",
+        "slug-format",
+        "image-count",
+      ]),
+    });
+    assert.equal(decision.mustRevise, false);
+  });
+
+  await test("real writing failures still send it back", () => {
+    const decision = gateDraft({
+      verdict: "ship",
+      issues: [],
+      failedCheckIds: checksReadyForReview(["slug-format", "word-count"]),
+    });
+    assert.equal(decision.mustRevise, true);
+    assert.ok(decision.reason.includes("word-count"));
+    assert.ok(!decision.reason.includes("slug-format"));
+  });
+
+  console.log("\nNothing above the H1");
+
+  await test("a publishing-metadata blockquote above the heading is dropped", () => {
+    const body = [
+      "> **Metadatos para la etapa de publicación**",
+      "> Title tag: Abogado de Lesiones Personales Houston",
+      "> Slug: preguntas-abogado-lesiones-personales-houston",
+      "",
+      "# Antes de Firmar el Contrato",
+      "",
+      "Confirme la licencia por escrito.",
+    ].join("\n");
+
+    const out = stripBeforeH1(body);
+    assert.ok(out.startsWith("# Antes de Firmar el Contrato"));
+    assert.ok(!out.includes("Slug:"));
+  });
+
+  await test("a body that already starts at the H1 is untouched", () => {
+    const body = "# Title\n\nA sentence.\n";
+    assert.equal(stripBeforeH1(body), body);
+  });
+
+  await test("real prose above the heading is kept, not silently deleted", () => {
+    // Losing an article's lead because it forgot its heading would be worse
+    // than the apparatus this removes.
+    const body = "Most lawyers take a third of the settlement.\n\n# Title\n";
+    assert.equal(stripBeforeH1(body), body);
+  });
+
+  await test("a body with no H1 at all is left alone", () => {
+    const body = "> a note\n\nSome text without any heading.\n";
+    assert.equal(stripBeforeH1(body), body);
   });
 
   console.log("\nImage generation rules");
