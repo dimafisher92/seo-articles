@@ -104,6 +104,20 @@ async function fetchSerpFacts(
   keyword: string,
   country: string,
 ): Promise<SerpFacts | null> {
+  /**
+   * Off by default, because the tool we have cannot answer this.
+   *
+   * `se_keyword_research_projects` in `serp` mode needs a `project_id`: it
+   * reports the SERP *inside an existing keyword-research project*, not for an
+   * arbitrary keyword. Creating a project per article is not the same thing
+   * and not worth the wait, so every run was paying a round trip to be refused
+   * and logging a warning that read like a broken integration.
+   *
+   * Kept behind a switch rather than deleted: the provider method is correct,
+   * and the day we hold project ids this becomes the fastest path again.
+   */
+  if (process.env.SEARCHATLAS_SERP !== "on") return null;
+
   const provider = createKeywordProvider();
   if (!provider) return null;
 
@@ -214,7 +228,11 @@ export async function runWriteArticle(
               label: "serp-intel",
               model: stageModels.serpIntel,
               tools: RESEARCH_TOOLS,
-              maxTurns: 45,
+              // Five results, not ten. Each one is a page fetched in its own
+              // turn, and this stage measured 194 seconds — the slowest in the
+              // pipeline. The consensus and the gaps come from the top of the
+              // page; results six to ten mostly repeat it.
+              maxTurns: 20,
               timeoutMs: 20 * 60_000,
             },
       ),

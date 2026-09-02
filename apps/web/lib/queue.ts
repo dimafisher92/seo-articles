@@ -130,6 +130,30 @@ export async function cancelJob(jobId: string): Promise<boolean> {
   return Boolean(canceled);
 }
 
+/**
+ * Puts a job back in the queue without holding the attempt against it.
+ *
+ * For the case where nothing is wrong with the job and nothing can be fixed:
+ * the Claude subscription is spent until its window resets, and the same
+ * article will pass unchanged afterwards. Treating that as a failure burned
+ * all three attempts in ten minutes against a limit that opened ninety minutes
+ * later, and killed the job for good.
+ *
+ * `attempts` is incremented when a job is claimed, so giving it back means
+ * putting that increment back too.
+ */
+export async function deferJob(jobId: string, reason: string): Promise<void> {
+  await db()
+    .update(jobs)
+    .set({
+      status: "queued",
+      error: reason,
+      claimedBy: null,
+      attempts: sql`greatest(${jobs.attempts} - 1, 0)`,
+    })
+    .where(eq(jobs.id, jobId));
+}
+
 /** Whether the worker should drop what it is doing. */
 export async function isCanceled(jobId: string): Promise<boolean> {
   const [job] = await db()

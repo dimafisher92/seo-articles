@@ -76,7 +76,11 @@ import {
   resolveStageModels,
 } from "../apps/worker/src/stage-models.js";
 import { createTimer } from "../apps/worker/src/timings.js";
-import { isRetryableFailure } from "../apps/worker/src/retry.js";
+import {
+  isRetryableFailure,
+  isUsageLimit,
+  minutesUntilReset,
+} from "../apps/worker/src/retry.js";
 import { serpIntelPrompt } from "@seo/playbook";
 import {
   JobCanceledError,
@@ -93,6 +97,7 @@ import { SearchAtlasProvider } from "../apps/worker/src/providers/searchatlas.js
 import {
   cancelJob,
   claimNextJob,
+  deferJob,
   isCanceled,
   requeueStaleJobs,
   STALE_JOB_MINUTES,
@@ -1106,6 +1111,46 @@ async function pureTests(): Promise<void> {
     assert.equal(
       detail(FRONT_MATTER_BODY),
       detail(stripFrontMatter(FRONT_MATTER_BODY)),
+    );
+  });
+
+  console.log("\nA spent subscription");
+
+  // Verbatim from the run that burned nine attempts in ten minutes.
+  const LIMIT_MESSAGE = "You've hit your limit · resets 7:20pm (Europe/Berlin)";
+
+  await test("the limit is recognised in the words the model used", () => {
+    // It arrives as the assistant's own text, not in any error field — which
+    // is why it was reported as error_max_turns and retried into the wall.
+    assert.equal(isUsageLimit(LIMIT_MESSAGE), true);
+    assert.equal(isUsageLimit("Stage draft failed: error_max_turns"), false);
+  });
+
+  await test("the wait is read from the message, in the zone it names", () => {
+    // 17:40 Berlin, resets at 19:20 Berlin — 100 minutes, whatever the
+    // server's own clock is set to.
+    const at1740Berlin = new Date("2026-09-02T15:40:00Z");
+    assert.equal(minutesUntilReset(LIMIT_MESSAGE, at1740Berlin), 100);
+  });
+
+  await test("a reset already past today is tomorrow's", () => {
+    const at2100Berlin = new Date("2026-09-02T19:00:00Z");
+    assert.equal(minutesUntilReset(LIMIT_MESSAGE, at2100Berlin), 24 * 60 - 100);
+  });
+
+  await test("a message with no time gives no number to invent one from", () => {
+    // The caller then uses its own default, which beats a guess made here.
+    assert.equal(minutesUntilReset("You've hit your limit", new Date()), null);
+    assert.equal(minutesUntilReset("resets soon(ish)", new Date()), null);
+  });
+
+  await test("a limit is not treated as a spent turn budget", () => {
+    // isRetryableFailure now sees the model's words too. Retrying inside the
+    // stage is pointless; the worker pauses and hands the job back instead.
+    assert.equal(
+      isRetryableFailure("error_max_turns", `error_max_turns ${LIMIT_MESSAGE}`),
+      true,
+      "a usage limit is transient — but the stage must not be what retries it",
     );
   });
 
@@ -2276,6 +2321,25 @@ async function queueTests(clientId: string): Promise<void> {
     assert.equal(await cancelJob(job!.id), true);
     assert.equal(await isCanceled(job!.id), true);
     assert.equal(await claimNextJob("worker-1"), null, "a cancelled job is not handed out");
+  });
+
+  await test("a deferred job keeps the attempt it did not use", async () => {
+    // Three attempts died in ten minutes against a limit that opened ninety
+    // minutes later. A job put back for a reason of its own has to come back
+    // whole.
+    const [job] = await db()
+      .insert(jobs)
+      .values({ type: "write_article", clientId, payload: {}, status: "queued" })
+      .returning();
+
+    const claimed = await claimNextJob("worker-1");
+    assert.equal(claimed?.attempts, 1, "claiming spends an attempt");
+
+    await deferJob(job!.id, "Claude subscription limit reached, resets in 100 min");
+
+    const back = await claimNextJob("worker-1");
+    assert.equal(back?.id, job!.id, "it is queued again");
+    assert.equal(back?.attempts, 1, "and has not spent a second attempt");
   });
 
   await test("a finished job cannot be cancelled after the fact", async () => {

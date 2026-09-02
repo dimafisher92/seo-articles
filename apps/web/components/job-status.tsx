@@ -33,6 +33,29 @@ export function JobStatus({
 }) {
   const label = TYPE_LABEL[job.type] ?? job.type;
 
+  // Waiting out a spent Claude subscription is not a failure and should not
+  // look like one: nothing is broken, the queue is intact, and it resumes on
+  // its own. The job is back in `queued` with the reason attached.
+  if (job.status === "queued" && /subscription limit/i.test(job.error ?? "")) {
+    return (
+      <div
+        className={cn(
+          "flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-sm",
+          className,
+        )}
+      >
+        <Clock className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+        <div className="min-w-0">
+          <p className="font-medium">{label} paused</p>
+          <p className="mt-0.5 break-words text-xs text-muted-foreground">
+            {job.error} — it resumes on its own, nothing is lost.
+          </p>
+        </div>
+        <StopButton jobId={job.id} className="ml-auto" />
+      </div>
+    );
+  }
+
   if (job.status === "queued") {
     return (
       <div

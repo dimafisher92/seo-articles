@@ -87,6 +87,21 @@ export async function reportComplete(
   await post(`/api/worker/jobs/${jobId}/complete`, { result });
 }
 
+/**
+ * Hands a job back without spending its attempt.
+ *
+ * The worker calls this instead of reporting a failure when the reason has
+ * nothing to do with the job — a spent subscription being the case that
+ * prompted it.
+ */
+export async function deferJob(jobId: string, reason: string): Promise<void> {
+  await post(`/api/worker/jobs/${jobId}/fail`, {
+    error: reason,
+    retryable: true,
+    deferred: true,
+  });
+}
+
 export async function reportFailure(
   jobId: string,
   error: string,

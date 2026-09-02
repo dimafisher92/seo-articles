@@ -305,7 +305,7 @@ Report what it takes to beat the SERP for "${brief.mainKeyword}" in ${brand.coun
 ${research}
 
 Report:
-- **topResults**: for each of the top 8-10 organic results — url, title, the format it uses, its main H2s, and its word count if you can tell.
+- **topResults**: for each of the top 5 organic results — url, title, the format it uses, its main H2s, and its word count if you can tell. Five is the budget: fetch those and stop.
 - **consensus**: the points essentially every result makes. These are table stakes; our article must cover them or look incomplete.
 - **entities**: the specific people, products, standards, tools, brands and technical concepts that credible coverage of this topic has to name.
 - **peopleAlsoAsk**: the PAA questions on this SERP.

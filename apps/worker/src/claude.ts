@@ -4,7 +4,12 @@ import { sleep } from "@seo/shared";
 
 import { config, assertClaudeCredentials } from "./config.js";
 import { log } from "./log.js";
-import { isRateLimit, isRetryableFailure } from "./retry.js";
+import {
+  isRateLimit,
+  isRetryableFailure,
+  isUsageLimit,
+  minutesUntilReset,
+} from "./retry.js";
 
 /**
  * Thin wrapper over the Agent SDK for one-shot, schema-validated stages.
@@ -34,6 +39,24 @@ export class ClaudeStageError extends Error {
   ) {
     super(message);
     this.name = "ClaudeStageError";
+  }
+}
+
+/**
+ * The subscription is spent until its window resets.
+ *
+ * Its own type because the right response is neither "retry" nor "fail": the
+ * job is fine and will pass unchanged later. Never retryable — a stage retry
+ * would go straight back into the same wall, which is exactly what happened
+ * nine times before this existed.
+ */
+export class ClaudeUsageLimitError extends ClaudeStageError {
+  constructor(
+    message: string,
+    readonly resetMinutes: number | null,
+  ) {
+    super(message, false);
+    this.name = "ClaudeUsageLimitError";
   }
 }
 
@@ -221,6 +244,21 @@ export async function runStage<T>(
         // Which limit was hit is half the diagnosis, and the subtypes carry it.
         const detail = [message.subtype, errors].filter(Boolean).join(": ");
 
+        const said = lastAssistantText ?? "";
+
+        // A spent subscription arrives as the model saying so, not as an error
+        // field — and it looks like `error_max_turns`, because the SDK keeps
+        // asking and keeps being told no. Check the words before the subtype.
+        if (isUsageLimit(said)) {
+          const resetMinutes = minutesUntilReset(said);
+          throw new ClaudeUsageLimitError(
+            `Claude subscription limit reached${
+              resetMinutes !== null ? `, resets in ${resetMinutes} min` : ""
+            } — ${truncateForLog(said, 120)}`,
+            resetMinutes,
+          );
+        }
+
         const because =
           lastToolResult !== undefined
             ? ` — last rejection: ${truncateForLog(lastToolResult)}`
@@ -230,7 +268,7 @@ export async function runStage<T>(
 
         throw new ClaudeStageError(
           `Stage ${options.label} failed: ${detail}${because}`,
-          isRetryableFailure(message.subtype, detail),
+          isRetryableFailure(message.subtype, `${detail} ${said}`),
         );
       }
 

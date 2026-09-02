@@ -5,8 +5,19 @@ import {
 } from "@seo/shared";
 import { closeDb } from "@seo/db";
 
-import { claimJob, reportComplete, reportFailure, reportProgress } from "./api.js";
-import { ClaudeStageError, setJobSignal, sleep } from "./claude.js";
+import {
+  claimJob,
+  deferJob,
+  reportComplete,
+  reportFailure,
+  reportProgress,
+} from "./api.js";
+import {
+  ClaudeStageError,
+  ClaudeUsageLimitError,
+  setJobSignal,
+  sleep,
+} from "./claude.js";
 import { assertClaudeCredentials, config, describeStageModels } from "./config.js";
 import { log } from "./log.js";
 import { runContentPlan } from "./pipelines/content-plan.js";
@@ -68,9 +79,23 @@ async function executeJob(
   }
 }
 
-async function tick(): Promise<boolean> {
+/**
+ * How long to wait when the subscription is spent and the message did not say.
+ *
+ * Long enough not to hammer a closed window, short enough that a limit which
+ * lifts early is not slept through.
+ */
+const DEFAULT_LIMIT_WAIT_MINUTES = 15;
+
+type TickResult =
+  | { did: "nothing" }
+  | { did: "work" }
+  /** The subscription is spent; nobody should ask again until it reopens. */
+  | { did: "hit-limit"; waitMinutes: number };
+
+async function tick(): Promise<TickResult> {
   const job = await claimJob();
-  if (!job) return false;
+  if (!job) return { did: "nothing" };
 
   currentJobId = job.id;
   const started = Date.now();
@@ -123,7 +148,25 @@ async function tick(): Promise<boolean> {
       stopHeartbeat();
       setJobSignal(undefined);
       currentJobId = null;
-      return true;
+      return { did: "work" };
+    }
+
+    // Nothing is wrong with this job and there is nothing to fix. Hand it back
+    // without spending its attempt, and stop asking for work until the window
+    // reopens — otherwise the worker takes it straight back and walks into the
+    // same wall, three times in ten minutes.
+    if (error instanceof ClaudeUsageLimitError) {
+      const waitMinutes = error.resetMinutes ?? DEFAULT_LIMIT_WAIT_MINUTES;
+      log.warn(
+        `${error.message}. Putting ${job.type} back and pausing for ${waitMinutes} min.`,
+      );
+      await deferJob(job.id, error.message).catch((deferError) => {
+        log.error("Could not hand the job back", deferError);
+      });
+      stopHeartbeat();
+      setJobSignal(undefined);
+      currentJobId = null;
+      return { did: "hit-limit", waitMinutes };
     }
 
     const message = error instanceof Error ? error.message : String(error);
@@ -148,7 +191,7 @@ async function tick(): Promise<boolean> {
     currentJobId = null;
   }
 
-  return true;
+  return { did: "work" };
 }
 
 /** Network blips and provider hiccups deserve a retry; bad data does not. */
@@ -174,9 +217,9 @@ async function main(): Promise<void> {
   let idleLogged = false;
 
   while (!shuttingDown) {
-    let didWork = false;
+    let result: TickResult = { did: "nothing" };
     try {
-      didWork = await tick();
+      result = await tick();
       idleLogged = false;
     } catch (error) {
       // Losing the app connection should not kill the worker — the laptop may
@@ -188,7 +231,21 @@ async function main(): Promise<void> {
 
     if (runOnce) break;
 
-    if (!didWork) {
+    if (result.did === "hit-limit") {
+      const until = new Date(Date.now() + result.waitMinutes * 60_000);
+      log.info(
+        `Paused until ${until.toISOString().slice(11, 16)} UTC — ` +
+          "the queue keeps filling, nothing is lost",
+      );
+      // In small steps so a shutdown does not have to wait out the whole pause.
+      const deadline = Date.now() + result.waitMinutes * 60_000;
+      while (!shuttingDown && Date.now() < deadline) {
+        await sleep(Math.min(30_000, deadline - Date.now()));
+      }
+      continue;
+    }
+
+    if (result.did === "nothing") {
       if (!idleLogged) {
         log.info("Queue empty — waiting for work");
         idleLogged = true;

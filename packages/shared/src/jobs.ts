@@ -131,6 +131,15 @@ export const jobFailSchema = z.object({
   error: z.string(),
   /** False marks the failure terminal, skipping the remaining attempts. */
   retryable: z.boolean().default(true),
+  /**
+   * Put the job back without holding this attempt against it.
+   *
+   * For a stop that is nothing to do with the job: a spent Claude
+   * subscription, where the same article passes unchanged once the window
+   * resets. Counting those as failures burned three attempts in ten minutes
+   * against a limit that opened ninety minutes later.
+   */
+  deferred: z.boolean().default(false),
 });
 
 export const assetIngestSchema = z.object({
