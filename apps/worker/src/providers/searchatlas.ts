@@ -403,11 +403,24 @@ export class SearchAtlasProvider implements KeywordProvider {
     return ranked.slice(0, limit);
   }
 
-  async getSerp(keyword: string, geo: GeoOptions): Promise<SerpResult> {
+  /**
+   * The top of the results page for one keyword.
+   *
+   * Two things here came from reading documentation rather than the server,
+   * and both were wrong. The mode was `serp_overview`; the server rejects that
+   * and names the four it accepts — `list`, `search`, `get`, `serp`. And geo
+   * arguments were being sent to a tool whose schema is
+   * `(mode*, page, page_size, search, ordering, project_id, keyword)`: no
+   * country, no language. The article pipeline read the resulting failure as
+   * "SearchAtlas has no data for this keyword" and fell back to crawling the
+   * web, which is three minutes of the slowest stage in the pipeline.
+   *
+   * Geo stays on `getMetrics` and `getRelated`, where the schema declares it.
+   */
+  async getSerp(keyword: string, _geo: GeoOptions): Promise<SerpResult> {
     const payload = await this.call(TOOLS.serp, {
-      mode: process.env.SEARCHATLAS_SERP_MODE ?? "serp_overview",
+      mode: process.env.SEARCHATLAS_SERP_MODE ?? "serp",
       keyword,
-      ...this.geoArgs(geo),
     });
 
     const results: SerpEntry[] = rows(payload)

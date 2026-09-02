@@ -1693,6 +1693,14 @@ async function pureTests(): Promise<void> {
    * arrives as a string with a thousands separator. If the adapter's tolerance
    * is real, this passes; if it only handles the tidy case, it does not.
    */
+  // What the adapter actually sent. The SERP call spent a release sending a
+  // mode the server does not accept and geo arguments the tool does not
+  // declare, and the pipeline read the failure as "no data for this keyword".
+  let lastSearchAtlasCall: { tool: string; args: Record<string, unknown> } = {
+    tool: "",
+    args: {},
+  };
+
   const searchAtlas = createServer((req, res) => {
     let body = "";
     req.on("data", (chunk) => (body += chunk));
@@ -1712,6 +1720,10 @@ async function pureTests(): Promise<void> {
       if (message.method === "initialize") return reply({ serverInfo: {} });
 
       const tool = message.params?.name;
+      lastSearchAtlasCall = {
+        tool: tool ?? "",
+        args: message.params?.arguments ?? {},
+      };
       const json = (value: unknown): unknown => ({
         content: [{ type: "text", text: JSON.stringify(value) }],
       });
@@ -1802,6 +1814,20 @@ async function pureTests(): Promise<void> {
         );
       }
 
+      if (tool === "se_keyword_research_projects") {
+        return reply(
+          json({
+            rows: [
+              { position: 1, url: "https://rival-a.com/fees", title: "Fees", snippet: "…" },
+              { position: 2, url: "https://rival-b.com/costs", title: "Costs" },
+              { position: null, url: "https://no-position.com" },
+            ],
+            people_also_ask: [{ question: "How much does it cost?" }],
+            related_searches: ["cheap trampolines"],
+          }),
+        );
+      }
+
       return reply(json({}));
     });
   });
@@ -1886,6 +1912,33 @@ async function pureTests(): Promise<void> {
         seen.push(`${done}/${total}`),
       );
       assert.deepEqual(seen, ["1/2", "2/2"]);
+    });
+
+    await test("the SERP call sends the mode the server accepts", async () => {
+      // The server named its four: list, search, get, serp. We were sending
+      // "serp_overview" and reading the rejection as an empty result.
+      await provider.getSerp("kids trampoline", geo);
+      assert.equal(lastSearchAtlasCall.tool, "se_keyword_research_projects");
+      assert.equal(lastSearchAtlasCall.args.mode, "serp");
+      assert.equal(lastSearchAtlasCall.args.keyword, "kids trampoline");
+    });
+
+    await test("the SERP call sends no geo, which this tool does not declare", async () => {
+      await provider.getSerp("kids trampoline", geo);
+      assert.equal(lastSearchAtlasCall.args.country_code, undefined);
+      assert.equal(lastSearchAtlasCall.args.language, undefined);
+    });
+
+    await test("SERP rows without a position are dropped, the rest are ordered", async () => {
+      const serp = await provider.getSerp("kids trampoline", geo);
+      assert.deepEqual(serp.results.map((r) => r.position), [1, 2]);
+      assert.equal(serp.results[0]?.domain, "rival-a.com");
+      assert.deepEqual(serp.peopleAlsoAsk, ["How much does it cost?"]);
+    });
+
+    await test("geo still reaches the tools whose schema declares it", async () => {
+      await provider.getMetrics(["kids trampoline"], geo);
+      assert.equal(lastSearchAtlasCall.args.country_code, "GB");
     });
 
     await test("a gap needs competitors, and never counts the client", async () => {
