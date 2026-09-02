@@ -231,6 +231,7 @@ export const imagePlanSchema = object(
       items: object(
         {
           role: { type: "string", enum: ["hero", "inline"] },
+          kind: { type: "string", enum: ["photo", "diagram"] },
           position: { type: "integer", minimum: 0 },
           source: { type: "string", enum: ["generated", "brand_asset"] },
           brandAssetId: { type: ["string", "null"] },
@@ -240,7 +241,7 @@ export const imagePlanSchema = object(
           caption: { type: ["string", "null"] },
           filename: str,
         },
-        ["role", "position", "source", "altText", "filename"],
+        ["role", "kind", "position", "source", "altText", "filename"],
       ),
     },
   },
@@ -402,6 +403,7 @@ export type DraftOutput = {
 export type ImagePlanOutput = {
   images: {
     role: "hero" | "inline";
+    kind: "photo" | "diagram";
     position: number;
     source: "generated" | "brand_asset";
     brandAssetId?: string | null;

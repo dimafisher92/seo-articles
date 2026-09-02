@@ -403,6 +403,7 @@ export function imagePlanPrompt(
   inlineCount: number,
   availableAssets: { id: string; category: string | null; altText: string | null; tags: string[] }[],
   mode: "generate" | "brand_assets" | "mixed",
+  playbook: string,
 ): string {
   const assetList = availableAssets.length
     ? availableAssets
@@ -426,6 +427,9 @@ export function imagePlanPrompt(
 
 ${renderBrandContext(brand)}
 
+## PLAYBOOK — section 10 governs every decision here
+${playbook}
+
 ## TASK
 Plan 1 hero image and ${inlineCount} in-body images for this article.
 
@@ -441,12 +445,15 @@ Rules:
 - Every image must carry information. No decorative filler, no generic stock-photo concepts, no "a person working on a laptop".
 - Each in-body image belongs under a specific H2 from the article. Name that heading exactly as it appears.
 - The hero sets the article's subject visually and is the one that shows in social shares.
-- For generated images, write a prompt a text-to-image model can execute: subject, composition, lighting, setting, style. Say what is in frame. Do not ask for readable body text or logos — models render those badly. Short labels on a diagram are acceptable.
-- Alt text: one sentence describing content and function. Not a keyword list, never starting with "image of".
+- \`kind\` says what you are asking for. \`photo\` is a scene with people, places or objects. \`diagram\` is a symbolic composition — icons, shapes, arrows — carrying at most 3 labels of at most 3 words.
+- **Never plan an image for anything made of figures or rows.** A fee comparison, a price table, a checklist, a timeline of dates: that is body content, and the writer puts it in the article as a Markdown table or list. An image model cannot be trusted with a number, and a number in a picture is one nobody can check, index or translate. If the only idea you have for a slot is a chart or a checklist, plan a different image or drop the slot.
+- A \`photo\` prompt asks for no readable text at all — no signage, no screens, no documents you can read — and keeps hands out of the foreground.
+- Write a prompt a text-to-image model can execute: subject, composition, lighting, setting, style. Say what is in frame. Never ask for logos.
+- Alt text: one sentence describing what is visible. Not a keyword list, never starting with "image of", and never stating a figure the image does not show.
 - Filenames: lowercase, hyphenated, descriptive, no extension.
 
 Return JSON only:
-{"images": [{"role": "hero" | "inline", "position": 0, "source": "generated" | "brand_asset",
+{"images": [{"role": "hero" | "inline", "kind": "photo" | "diagram", "position": 0, "source": "generated" | "brand_asset",
   "brandAssetId": "uuid or null", "prompt": "generation prompt or null",
   "placementHeading": "exact H2 text or null for hero",
   "altText": "...", "caption": "short caption or null", "filename": "..."}]}`;

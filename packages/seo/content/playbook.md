@@ -122,10 +122,20 @@ not appear in the body is a manual-action risk.
 ## 10. Images
 
 - One hero (16:9) plus 2-3 in-body images placed where they explain something.
-- Decorative stock filler adds nothing. Each image should carry information: a
-  diagram, a comparison, a product in context, a labelled process.
-- Alt text describes the image's content and function in one sentence. It is not
-  a keyword dumping ground, and it is not "image of".
+- Decorative stock filler adds nothing. Plan an image only for something a
+  picture shows better than a sentence does.
+- **Anything made of figures or rows is body content, not an image.** A fee
+  comparison, a checklist, a table of costs, a timeline of dates: write it as a
+  Markdown table or list. Search indexes it, a screen reader reads it, a
+  translator translates it and a reader can copy it — a picture of it does none
+  of those, and a number drawn by an image model is a number nobody checked.
+- An image carries at most three labels of at most three words. If the idea
+  needs a fourth label, it needs a paragraph instead.
+- Photographs of people: hands are not the subject, no gestures, no close-ups
+  of hands, and nothing in frame that has to be read.
+- Alt text describes what is visible in one sentence. It is not a keyword
+  dumping ground, it is not "image of", and it does not state a figure the
+  image does not legibly show.
 - Descriptive filenames, WebP, explicit width/height, lazy-load everything below
   the fold.
 - Generated imagery must match the brand's visual language via the Brand Vault

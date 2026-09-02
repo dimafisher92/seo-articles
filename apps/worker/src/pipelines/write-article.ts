@@ -20,7 +20,8 @@ import {
 } from "@seo/playbook";
 import {
   countWords,
-  imageSpecForRole,
+  findImagePromptRisks,
+  imageRequestFor,
   readingTimeMinutes,
   runSeoChecks,
   gateDraft,
@@ -30,6 +31,7 @@ import {
   truncate,
   TITLE_TAG_MAX,
   META_DESCRIPTION_MAX,
+  type ImageKind,
   type ImageMode,
   type ImageProvider,
   buildJsonLd,
@@ -341,6 +343,7 @@ export async function runWriteArticle(
       mode: input.imageMode,
       inlineCount: input.inlineImageCount,
       styleReference: loaded.styleReference,
+      playbook,
       report,
     });
 
@@ -448,6 +451,7 @@ async function produceImages(params: {
   mode: ImageMode;
   inlineCount: number;
   styleReference: BrandAsset | null;
+  playbook: string;
   report: StageReporter;
 }): Promise<PlacedImage[]> {
   const assets = await loadBrandAssets(params.clientId);
@@ -471,6 +475,7 @@ async function produceImages(params: {
         tags: a.tags,
       })),
       mode,
+      params.playbook,
     ),
     {
       schema: imagePlanSchema,
@@ -480,6 +485,19 @@ async function produceImages(params: {
       timeoutMs: 10 * 60_000,
     },
   );
+
+  // Reported, not rejected: the generation rules override a bad request on the
+  // way to the provider, but when a picture comes back wrong the log should
+  // already say which prompt ordered it.
+  for (const spec of plan.images) {
+    const risks = findImagePromptRisks(spec.prompt ?? "");
+    if (risks.length > 0) {
+      log.warn(
+        `Image plan "${spec.filename}" asks for ${risks.join(", ")} — ` +
+          "the generation rules will override that",
+      );
+    }
+  }
 
   await db().delete(articleImages).where(eq(articleImages.articleId, params.articleId));
 
@@ -500,6 +518,7 @@ async function produceImages(params: {
       ordered.map((spec) => ({
         articleId: params.articleId,
         role: spec.role,
+        kind: spec.kind,
         position: spec.position,
         source: spec.source,
         status: "generating" as const,
@@ -540,6 +559,7 @@ async function produceImages(params: {
               articleId: params.articleId,
               clientId: params.clientId,
               role: spec.role,
+              kind: spec.kind,
               prompt: spec.prompt ?? "",
               filename: spec.filename,
               styleReferenceUrl: params.styleReference?.blobUrl,
@@ -608,6 +628,7 @@ async function generateAndStore(params: {
   articleId: string;
   clientId: string;
   role: "hero" | "inline";
+  kind: ImageKind;
   prompt: string;
   filename: string;
   styleReferenceUrl: string | undefined;
@@ -616,11 +637,16 @@ async function generateAndStore(params: {
   if (!params.provider) throw new Error("No image provider configured");
   if (!params.prompt) throw new Error("No prompt supplied for a generated image");
 
-  const spec = imageSpecForRole(params.role);
-  const generated = await params.provider.generate({
+  // The rules travel with the prompt rather than living in the planning stage
+  // alone: the plan is what asked for a twelve-row checklist in the first place.
+  const request = imageRequestFor({
+    role: params.role,
+    kind: params.kind,
     prompt: params.prompt,
-    aspectRatio: spec.aspectRatio,
-    resolution: spec.resolution,
+  });
+
+  const generated = await params.provider.generate({
+    ...request,
     ...(params.styleReferenceUrl
       ? { styleReferenceUrl: params.styleReferenceUrl, styleStrength: 0.5 }
       : {}),
@@ -630,7 +656,7 @@ async function generateAndStore(params: {
     .update(articleImages)
     .set({
       magnificTaskId: generated.taskId,
-      aspectRatio: spec.aspectRatio,
+      aspectRatio: request.aspectRatio,
     })
     .where(eq(articleImages.id, params.imageId));
 

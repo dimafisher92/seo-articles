@@ -45,7 +45,8 @@ import {
   gateDraft,
   statusAfterReview,
   ASPECT_RATIOS,
-  imageSpecForRole,
+  imageRequestFor,
+  findImagePromptRisks,
   scoreKeyword,
   slugify,
   truncate,
@@ -731,11 +732,15 @@ async function pureTests(): Promise<void> {
 
   await test("the ratios the article pipeline asks for translate", () => {
     assert.equal(
-      aspectRatioName(imageSpecForRole("hero").aspectRatio),
+      aspectRatioName(
+        imageRequestFor({ role: "hero", kind: "photo", prompt: "x" }).aspectRatio,
+      ),
       "widescreen_16_9",
     );
     assert.equal(
-      aspectRatioName(imageSpecForRole("inline").aspectRatio),
+      aspectRatioName(
+        imageRequestFor({ role: "inline", kind: "photo", prompt: "x" }).aspectRatio,
+      ),
       "standard_3_2",
     );
   });
@@ -1094,6 +1099,71 @@ async function pureTests(): Promise<void> {
       detail(FRONT_MATTER_BODY),
       detail(stripFrontMatter(FRONT_MATTER_BODY)),
     );
+  });
+
+  console.log("\nImage generation rules");
+
+  const PLANNED = "A lawyer and a client reviewing a contract at a desk in Houston.";
+
+  await test("the planned prompt survives, the rules are added to it", () => {
+    const request = imageRequestFor({
+      role: "inline",
+      kind: "photo",
+      prompt: PLANNED,
+    });
+    assert.ok(request.prompt.startsWith(PLANNED));
+    assert.ok(/five fingers/i.test(request.prompt));
+  });
+
+  await test("a photo is told to keep hands out of the way and text out of frame", () => {
+    // The six-fingered hand and the shop sign nobody can read.
+    const { prompt } = imageRequestFor({
+      role: "hero",
+      kind: "photo",
+      prompt: PLANNED,
+    });
+    assert.ok(/hands are never the subject/i.test(prompt));
+    assert.ok(/no legible text/i.test(prompt));
+  });
+
+  await test("a diagram is told no numbers, and told to override a request for them", () => {
+    const { prompt } = imageRequestFor({
+      role: "inline",
+      kind: "diagram",
+      prompt: "A bar chart comparing 25%, 33% and 40% of a $100,000 settlement.",
+    });
+    assert.ok(/no numbers of any kind/i.test(prompt));
+    assert.ok(/at most 3 labels/i.test(prompt));
+    // The planning stage is what asked for the chart, so the last word has to
+    // belong to the rules rather than to the prompt above them.
+    assert.ok(/ignore that part of it/i.test(prompt));
+    assert.ok(prompt.lastIndexOf("ignore that part") > prompt.indexOf("bar chart"));
+  });
+
+  await test("a diagram is rendered large enough for its labels to survive", () => {
+    // 1K in-body is 1216x832; a label at a twelfth of that is on the edge.
+    assert.equal(
+      imageRequestFor({ role: "inline", kind: "diagram", prompt: "x" }).resolution,
+      "2k",
+    );
+    assert.equal(
+      imageRequestFor({ role: "inline", kind: "photo", prompt: "x" }).resolution,
+      "1k",
+    );
+  });
+
+  await test("a prompt that orders what models render badly is reported", () => {
+    assert.deepEqual(
+      findImagePromptRisks(
+        "A bar chart comparing 25%, 33% and 40% contingency fees.",
+      ),
+      ["numbers", "a chart"],
+    );
+    assert.deepEqual(
+      findImagePromptRisks("A checklist of the twelve questions, grouped."),
+      ["a list"],
+    );
+    assert.deepEqual(findImagePromptRisks(PLANNED), []);
   });
 
   console.log("\nHTML the draft had no business writing");

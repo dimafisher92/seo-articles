@@ -73,6 +73,13 @@ export const articleStatusEnum = pgEnum("article_status", [
 
 export const imageRoleEnum = pgEnum("image_role", ["hero", "inline"]);
 
+/**
+ * A photograph or a labelled diagram. Stored rather than derived, because
+ * regeneration from the editor renders off this row and would otherwise send a
+ * diagram the rules written for a photograph.
+ */
+export const imageKindEnum = pgEnum("image_kind", ["photo", "diagram"]);
+
 export const imageSourceEnum = pgEnum("image_source", [
   "generated",
   "brand_asset",
@@ -471,6 +478,8 @@ export const articleImages = pgTable(
       .notNull()
       .references(() => articles.id, { onDelete: "cascade" }),
     role: imageRoleEnum("role").notNull(),
+    /** Null on rows written before the distinction existed; read as a photo. */
+    kind: imageKindEnum("kind"),
     /** Ordinal within the article; the hero is 0. */
     position: integer("position").notNull().default(0),
     source: imageSourceEnum("source").notNull(),

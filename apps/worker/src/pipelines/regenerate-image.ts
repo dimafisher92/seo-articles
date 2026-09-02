@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 
 import { articleImages, articles } from "@seo/db";
 import {
-  imageSpecForRole,
+  imageRequestFor,
   markdownToHtml,
   reconcileImages,
   type PlacedImage,
@@ -50,7 +50,15 @@ export async function runRegenerateImage(
   }
 
   const loaded = await loadClient(input.clientId);
-  const spec = imageSpecForRole(image.role);
+
+  // Same rules as first generation, from the same function. A row written
+  // before the distinction existed has no kind; a photograph is the safer
+  // reading, since the diagram rules would forbid text a photo never has.
+  const request = imageRequestFor({
+    role: image.role,
+    kind: image.kind ?? "photo",
+    prompt,
+  });
 
   await report(1, 2, "Generating the image");
 
@@ -60,9 +68,7 @@ export async function runRegenerateImage(
     .where(eq(articleImages.id, image.id));
 
   const generated = await provider.generate({
-    prompt,
-    aspectRatio: spec.aspectRatio,
-    resolution: spec.resolution,
+    ...request,
     ...(loaded.styleReference
       ? { styleReferenceUrl: loaded.styleReference.blobUrl, styleStrength: 0.5 }
       : {}),
@@ -88,7 +94,7 @@ export async function runRegenerateImage(
       magnificTaskId: generated.taskId,
       status: "ready",
       source: "generated",
-      aspectRatio: spec.aspectRatio,
+      aspectRatio: request.aspectRatio,
       error: null,
     })
     .where(eq(articleImages.id, image.id));

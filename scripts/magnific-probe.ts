@@ -12,13 +12,18 @@
  *
  *   pnpm magnific:probe                 # default model, asks before spending
  *   pnpm magnific:probe --model mystic
+ *   pnpm magnific:probe --kind diagram --prompt "three icons in a row: a badge, a wallet, a folder"
  *   pnpm magnific:probe --yes           # skip the confirmation
  */
 
 import { createInterface } from "node:readline/promises";
 
 import { config as loadEnv } from "dotenv";
-import { imageSpecForRole, type GenerateImageRequest } from "@seo/shared";
+import {
+  imageRequestFor,
+  type GenerateImageRequest,
+  type ImageKind,
+} from "@seo/shared";
 
 import {
   authHeaderFor,
@@ -163,14 +168,23 @@ async function main(): Promise<void> {
     return;
   }
 
-  const spec = imageSpecForRole("inline");
+  // `--prompt` and `--kind` make this the cheap way to see what the generation
+  // rules do to one image, before spending a whole article finding out.
+  const kind: ImageKind = flag("kind") === "diagram" ? "diagram" : "photo";
   const request: GenerateImageRequest = {
-    prompt:
-      "A single ripe banana on a plain light grey studio background, " +
-      "soft even lighting, centred, product photography.",
-    aspectRatio: spec.aspectRatio,
+    ...imageRequestFor({
+      role: "inline",
+      kind,
+      prompt:
+        flag("prompt") ??
+        "A single ripe banana on a plain light grey studio background, " +
+          "soft even lighting, centred, product photography.",
+    }),
+    // The probe pays for itself at the cheapest size whatever the rules ask for.
     resolution: "1k",
   };
+
+  dump(`prompt sent (kind=${kind})`, request.prompt);
 
   dump("request body the adapter builds", model.buildBody(request));
 
