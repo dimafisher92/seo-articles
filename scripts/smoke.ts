@@ -1700,6 +1700,7 @@ async function pureTests(): Promise<void> {
     tool: "",
     args: {},
   };
+  let refuseSerp = false;
 
   const searchAtlas = createServer((req, res) => {
     let body = "";
@@ -1810,6 +1811,21 @@ async function pureTests(): Promise<void> {
                 },
               ],
             },
+          }),
+        );
+      }
+
+      if (tool === "se_keyword_research_projects" && refuseSerp) {
+        // Exactly what SearchAtlas sends for a bad argument: a successful MCP
+        // response whose body says no.
+        return reply(
+          json({
+            success: false,
+            error_type: "client",
+            error_code: "VALIDATION",
+            message:
+              "Invalid parameters — mode: input should be 'list', 'search', 'get' or 'serp'.",
+            is_transient: false,
           }),
         );
       }
@@ -1939,6 +1955,25 @@ async function pureTests(): Promise<void> {
     await test("geo still reaches the tools whose schema declares it", async () => {
       await provider.getMetrics(["kids trampoline"], geo);
       assert.equal(lastSearchAtlasCall.args.country_code, "GB");
+    });
+
+    await test("a refused call is an error, not an empty result", async () => {
+      // The one that cost three rounds: the server answered "your mode is not
+      // one of the four I accept", the adapter handed that body back as data,
+      // and the pipeline reported an account with no data for the keyword.
+      refuseSerp = true;
+      try {
+        await assert.rejects(
+          () => provider.getSerp("kids trampoline", geo),
+          (error: Error) => {
+            assert.match(error.message, /VALIDATION/);
+            assert.match(error.message, /should be 'list', 'search', 'get' or 'serp'/);
+            return true;
+          },
+        );
+      } finally {
+        refuseSerp = false;
+      }
     });
 
     await test("a gap needs competitors, and never counts the client", async () => {

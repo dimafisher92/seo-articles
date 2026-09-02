@@ -110,8 +110,12 @@ async function fetchSerpFacts(
   try {
     const serp = await provider.getSerp(keyword, { country });
     if (serp.results.length === 0) {
+      // An empty answer, not a refused one — those now throw, and are reported
+      // below with the server's own words. Saying the same sentence for both
+      // is what let a rejected `mode` argument masquerade as an account with
+      // no data for three rounds.
       log.warn(
-        `${provider.name} returned no results for "${keyword}" — ` +
+        `${provider.name} has no SERP for "${keyword}" — ` +
           "the SERP stage will read the web itself instead",
       );
       return null;
@@ -129,7 +133,7 @@ async function fetchSerpFacts(
     };
   } catch (error) {
     log.warn(
-      `Could not read the SERP for "${keyword}": ` +
+      `SERP lookup failed for "${keyword}": ` +
         `${error instanceof Error ? error.message : String(error)} — ` +
         "falling back to reading the web",
     );

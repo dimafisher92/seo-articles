@@ -235,6 +235,17 @@ function mapRanked(row: Json): RankedKeyword | null {
 
 /* --------------------------------------------------------------- provider */
 
+/** A tool that answered, and said no. */
+export class SearchAtlasError extends Error {
+  constructor(
+    message: string,
+    readonly transient: boolean,
+  ) {
+    super(message);
+    this.name = "SearchAtlasError";
+  }
+}
+
 export class SearchAtlasProvider implements KeywordProvider {
   readonly name = "searchatlas";
   private readonly client: McpHttpClient;
@@ -249,9 +260,40 @@ export class SearchAtlasProvider implements KeywordProvider {
     this.client = new McpHttpClient(url, headers, "seo-articles-worker");
   }
 
+  /**
+   * Calls one tool, and treats a refusal as a refusal.
+   *
+   * SearchAtlas answers a bad request with a *successful* MCP response whose
+   * body is `{"success": false, "error_code": "VALIDATION", "message": "…"}`.
+   * This used to unwrap that and hand it back as data. Nothing downstream
+   * recognises it, `rows()` finds no rows in it, and the caller concludes the
+   * account has no data for the keyword.
+   *
+   * That cost three rounds on one bug. The SERP call was being sent a mode the
+   * server does not accept; the server said so, in a sentence naming the four
+   * it does accept, and the pipeline reported "no results for this keyword"
+   * and quietly went off to crawl the web for three minutes instead. The probe
+   * printed the real message in two seconds, because it prints the body.
+   */
   private async call(tool: string, args: Json): Promise<unknown> {
     const result = await this.client.callTool(tool, args);
-    return unwrapToolResult(result);
+    const payload = unwrapToolResult(result);
+
+    if (typeof payload === "object" && payload !== null) {
+      const body = payload as Json;
+      if (body.success === false) {
+        const message = str(body.message) ?? "no message";
+        const code = str(body.error_code);
+        throw new SearchAtlasError(
+          `${tool} refused the call${code ? ` (${code})` : ""}: ${message}`,
+          // Whether to try again is the server's call, not our guess: it says
+          // so in the same body.
+          body.is_transient === true,
+        );
+      }
+    }
+
+    return payload;
   }
 
   /** Their country parameter is an uppercase alpha-2. */
