@@ -30,6 +30,16 @@ id -u "${RUN_AS}" >/dev/null 2>&1 ||
   die "No user '${RUN_AS}'. Create it first: adduser --disabled-password --gecos '' ${RUN_AS}"
 ok "user ${RUN_AS}"
 
+# The repository already belongs to someone. If that is not the user we are
+# about to install for, stop: the chown below would take it away from them —
+# and on this machine that means the worker loses the deploy key it pulls with,
+# which surfaces later as a deploy that cannot fetch.
+OWNER="$(stat -c '%U' "${ROOT}")"
+if [[ "${OWNER}" != "${RUN_AS}" && "${OWNER}" != "root" ]]; then
+  die "${ROOT} belongs to '${OWNER}', but this would install for '${RUN_AS}' and chown it away from them. Re-run as: SEO_WORKER_USER=${OWNER} bash ${BASH_SOURCE[0]}"
+fi
+ok "repository belongs to ${OWNER}"
+
 HOME_DIR="$(getent passwd "${RUN_AS}" | cut -d: -f6)"
 [[ -d "${HOME_DIR}" ]] || die "${RUN_AS} has no home directory; the Agent SDK needs one."
 

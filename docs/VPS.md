@@ -179,9 +179,11 @@ bash deploy/install-web.sh
 bash deploy/install-worker.sh
 ```
 
-Both scripts check their prerequisites and refuse rather than guessing. If the
-service user is not called `seo`, prefix both with
-`SEO_WORKER_USER=<name>`.
+Both scripts check their prerequisites and refuse rather than guessing. **If
+the service user is not called `seo`, prefix both with
+`SEO_WORKER_USER=<name>`** — they also refuse when the repository belongs to
+someone else, because installing for the wrong user would chown it away from
+whoever holds the deploy key.
 
 ```bash
 curl -I http://127.0.0.1:3000          # 200 or 307
