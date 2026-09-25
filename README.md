@@ -19,25 +19,40 @@ until a human has read its brief and pressed the button on that row.
 
 ## Architecture
 
-The system is split across two deployments because the Claude Agent SDK on a
+The app and the worker are separate processes because the Claude Agent SDK on a
 subscription needs a long-lived Node process with the `claude` binary, which a
-Vercel function cannot provide — and a single article takes 5-15 minutes.
+serverless function cannot provide — and a single article takes 5-15 minutes.
+
+They run on one server:
 
 ```
-┌──────────────── Vercel ────────────────┐        ┌──── Your machine ────┐
-│  Next.js — UI, API routes, job queue   │        │  worker (Node)       │
-│  Postgres · Vercel Blob                │◄───────┤  Claude Agent SDK    │
-└────────────────────────────────────────┘  HTTPS │  SearchAtlas         │
-                                            (poll) │  Magnific            │
-                                                   └──────────────────────┘
+┌──────────────────── one VPS ─────────────────────┐
+│  Caddy :443  ──►  Next.js 127.0.0.1:3000         │      ┌──────────────┐
+│  UI, API routes, job queue                        │      │ Vercel Blob  │
+│                     │                             │◄────►│  (images)    │
+│  Postgres 127.0.0.1:5432  ◄─────────┐             │      └──────────────┘
+│                                      │            │
+│  worker: Claude Agent SDK · SearchAtlas · Magnific│
+│  polls 127.0.0.1:3000 ────────────────────────────┤
+└───────────────────────────────────────────────────┘
 ```
+
+[`docs/VPS.md`](docs/VPS.md) is the runbook. Postgres listens on localhost
+only and is not reachable from the internet; the worker talks to the app over
+loopback, so the queue never leaves the machine.
+
+The app also deploys to Vercel unchanged if you would rather not run a server —
+the worker then polls it over HTTPS from wherever it lives. That was the
+original shape, and the reason it is not the default any more is that the
+managed database on its free tier paused itself mid-month and took the app
+down with it.
 
 The worker **pulls** work rather than being pushed to. That means:
 
 - it runs behind NAT with no tunnel, no white IP, no open ports;
-- jobs queue harmlessly while the machine is asleep;
-- **the Claude subscription token never reaches Vercel's environment** — it
-  lives only on the machine running the worker.
+- jobs queue harmlessly while it is down, and a restart mid-article is safe;
+- **the Claude subscription token stays on the machine running the worker** —
+  it is never needed by the app.
 
 Queue coordination goes over HTTP; bulk domain data (hundreds of keyword rows,
 a full article body) is written straight to Postgres by the worker, which
@@ -48,7 +63,7 @@ already holds the connection.
 | Path | What it is |
 |---|---|
 | `apps/web` | Next.js app — deploys to Vercel |
-| `apps/worker` | The generation worker — runs on your machine or a VPS |
+| `apps/worker` | The generation worker — a long-lived Node process |
 | `packages/db` | Drizzle schema and migrations |
 | `packages/shared` | Job contracts, provider interfaces, SEO checks, rendering |
 | `packages/seo` | The SEO playbook (editable Markdown) and prompt builders |
@@ -120,8 +135,8 @@ strictly sequentially: article generation is token-heavy and a subscription's
 rate limit is shared, so running two at once just means both stalling on
 backoff instead of one finishing.
 
-To keep generating when your machine is off, put the worker on a server —
-[`docs/VPS.md`](docs/VPS.md) is the runbook and takes about fifteen minutes.
+To keep generating when your machine is off, run the whole thing on a server —
+[`docs/VPS.md`](docs/VPS.md) is the runbook and takes about half an hour.
 
 ---
 
@@ -286,7 +301,8 @@ It needs a live Postgres and creates and removes its own rows.
 - **The worker is a single point of failure for generation.** Jobs are never
   lost, but they stop moving when the machine is off. The same worker runs
   unchanged on a small VPS — [`docs/VPS.md`](docs/VPS.md) is the runbook, and
-  `deploy/` has the systemd unit and the install and update scripts.
+  `deploy/` has the systemd units, the Caddy config and the install and update
+  scripts.
 - **A job whose worker vanishes** is requeued after 10 minutes of silence, up
   to `maxAttempts`. The sweep runs on the claim endpoint, so the rescue happens
   the moment a worker next asks for work rather than on a schedule — Vercel's

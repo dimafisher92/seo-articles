@@ -1,0 +1,43 @@
+# The Next.js app as a service.
+#
+# Installed by deploy/install-web.sh, which substitutes the paths.
+#
+# A separate unit from the worker on purpose. This one should come back in
+# seconds; the worker is given fifty minutes to stop, because it finishes the
+# article it is holding first. One unit for both would force the slow rule on
+# the fast service.
+
+[Unit]
+Description=SEO article generator — web app
+Documentation=https://github.com/dimafisher92/seo-articles/blob/HEAD/docs/VPS.md
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+Group=__USER__
+
+WorkingDirectory=__ROOT__/apps/web
+ExecStart=/usr/bin/env pnpm start
+
+Restart=always
+RestartSec=5
+
+# Bound to loopback: Caddy is the only thing the internet can reach.
+Environment=HOSTNAME=127.0.0.1
+Environment=PORT=3000
+Environment=HOME=__HOME__
+Environment=NODE_ENV=production
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=seo-web
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=false
+
+[Install]
+WantedBy=multi-user.target

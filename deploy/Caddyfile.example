@@ -1,0 +1,26 @@
+# Caddy in front of the app. Copy to /etc/caddy/Caddyfile, replace the domain,
+# then: systemctl reload caddy
+#
+# Caddy obtains and renews the certificate itself, which is the whole reason it
+# is here rather than nginx plus certbot plus a cron job to renew.
+#
+# The app listens on 127.0.0.1:3000 and is not otherwise reachable: this is the
+# only door. Postgres has no door at all — it stays on localhost, and 5432 is
+# never opened.
+
+seo.gsmgrowthagency.com {
+	encode gzip
+
+	# The article editor posts whole article bodies, and brand assets are
+	# uploaded through the app.
+	request_body {
+		max_size 16MB
+	}
+
+	reverse_proxy 127.0.0.1:3000
+
+	log {
+		output file /var/log/caddy/seo-articles.log
+		format console
+	}
+}
